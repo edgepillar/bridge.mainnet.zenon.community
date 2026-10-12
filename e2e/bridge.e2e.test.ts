@@ -21,6 +21,7 @@ import {
   evmUser,
   evmUserWallet,
   mine,
+  evmClock,
   receiveAll,
   send,
   until,
@@ -69,10 +70,11 @@ async function statusOfWrap(id: string) {
 
 beforeAll(async () => {
   d = await setup()
+  await evmClock(0)
   orchestrator = new TestOrchestrator({ bridge: d.bridge, evmConfirmations: Number(PARAMS.evm.confirmations), affiliate: true, log: console.log })
 })
 
-afterAll(() => orchestrator?.stop())
+afterAll(async () => { orchestrator?.stop(); await evmClock(1) })
 
 describe('setup', () => {
   it('shows the app one network and one pair, as it reads mainnet', async () => {

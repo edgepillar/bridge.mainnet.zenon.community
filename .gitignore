@@ -1,4 +1,7 @@
 node_modules/
+.browser-results/
+.lab-source/
+.lab-tools/
 dist/
 coverage/
 *.local
@@ -6,6 +9,8 @@ coverage/
 .vite/
 e2e/.state/
 e2e/.cache/
+e2e/lab/.build/
+e2e/lab/assets/
 *.log
 .DS_Store
 Thumbs.db
