@@ -9,6 +9,24 @@ const tx = '0x' + 'ab'.repeat(32), bridge = '0x' + '12'.repeat(20) as `0x${strin
 const log = () => ({ removed:false,blockNumber:90n,blockHash:'0x'+'cd'.repeat(32),transactionHash:tx,logIndex:5,args:{to:recipient,token:bridge,amount:100n} })
 beforeEach(() => { vi.resetAllMocks(); m.unsigned.mockResolvedValue({count:0,list:[]});m.logs.mockResolvedValue([]);m.block.mockResolvedValue({hash:log().blockHash});m.unwrap.mockResolvedValue(null);m.send.mockResolvedValue('ef'.repeat(32)) })
 describe('lab orchestrator retry and source identity', () => {
+  it('waits for the original active pass on stop and coalesces concurrent ticks', async () => {
+    m.unsigned.mockResolvedValue({count:1,list:[{id:'ab'.repeat(32),confirmationsToFinality:0,networkClass:2,chainId:31337,toAddress:bridge,tokenAddress:bridge,amount:100n,fee:3n}]})
+    let release!: (hash: string) => void
+    m.send.mockImplementationOnce(() => new Promise<string>((resolve) => { release = resolve }))
+    const o = new TestOrchestrator({bridge,evmConfirmations:2,affiliate:true})
+    o.start()
+    await vi.waitFor(() => expect(m.send).toHaveBeenCalledTimes(1))
+    const joined = o.tick()
+    let stopped = false
+    const stopping = o.stop().then(() => { stopped = true })
+    await Promise.resolve()
+    expect(stopped).toBe(false)
+    release('ef'.repeat(32))
+    await Promise.all([stopping, joined])
+    expect(stopped).toBe(true)
+    expect(o.signedWraps).toBe(1)
+    expect(m.send).toHaveBeenCalledTimes(1)
+  })
   it('does not mark a failed wrap update complete', async () => {
     m.unsigned.mockResolvedValue({count:1,list:[{id:'ab'.repeat(32),confirmationsToFinality:0,networkClass:2,chainId:31337,toAddress:bridge,tokenAddress:bridge,amount:100n,fee:3n}]})
     m.send.mockRejectedValueOnce(new Error('publication failed'))
