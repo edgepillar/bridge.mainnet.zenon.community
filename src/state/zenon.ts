@@ -16,8 +16,9 @@
 // use is refused with the reason:
 //
 //   - "embedded" or none: the wallet's internal node has no address.
-//   - 127.0.0.1 or localhost while the page is not itself local.
-//   - ws:// from an https page: the browser blocks mixed content.
+//   - ws:// from an https page: the browser blocks mixed content. A node on
+//     127.0.0.1 or localhost is the exception browsers make, and it is the
+//     user's own machine, so a local devnet works from the deployed page.
 //   - unreachable within 5 s.
 
 import { reactive, shallowRef, watch } from 'vue'
@@ -132,14 +133,11 @@ export async function startNode() {
   if (!client) attach(new ZenonClient(config.defaultNodes[0]))
 }
 
-const pageIsLocal = () => ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)
-
 /** Why the wallet's node cannot be used from this page, or '' if it can be tried. */
 export function nodeProblem(url: string | null): string {
   if (!url || url === 'embedded' || !/^(wss?|https?):\/\//i.test(url)) return 'Syrius uses its embedded node'
   const u = new URL(url.replace(/^http/i, 'ws'))
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname)
-  if (local && !pageIsLocal()) return 'Syrius uses a local node'
   if (location.protocol === 'https:' && u.protocol === 'ws:' && !local) return 'Syrius node is not secure (ws)'
   return ''
 }
