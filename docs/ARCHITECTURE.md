@@ -59,7 +59,7 @@ sequenceDiagram
   P->>S: connect
   S-->>P: address, chain id, node host
   U->>P: Use Syrius node
-  alt embedded, local, or ws from https
+  alt embedded, or remote ws from https
     Note over P: keep the default, show why
   else usable
     P->>W: frontier momentum
