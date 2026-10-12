@@ -202,7 +202,7 @@ state: ${await page.evaluate(() => { const b = (window as any).__bridge; return 
     await page.waitForFunction(() => (window as any).__bridge.node.source === 'wallet')
     expect(await page.evaluate(() => (window as any).__bridge.node.chainId as number)).toBe(322)
     await page.waitForFunction(() => !document.querySelector('[role="dialog"]'))
-    await click('[data-testid="wallet-zenon"]')
+    // The menu closed when the pointer left it for the dialog.
     await page.waitForFunction(() => !document.querySelector('[data-testid="node-switch"]'))
   })
 
