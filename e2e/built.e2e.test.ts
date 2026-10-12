@@ -25,7 +25,7 @@ beforeAll(async()=>{
   try { await build({logLevel:'error',mode:'production',build:{outDir,emptyOutDir:true}}) }
   finally { if(previousNodeEnv===undefined)delete process.env.NODE_ENV;else process.env.NODE_ENV=previousNodeEnv }
   server=await preview({logLevel:'error',build:{outDir},preview:{host:'127.0.0.1',port:5195,strictPort:true}})
-  browser=await puppeteer.launch({executablePath:process.env.CHROME_PATH,headless:true,args:process.env.CI?['--no-sandbox']:[]})
+  browser=await puppeteer.launch({executablePath:process.env.CHROME_PATH,headless:true})
   if(process.env.EXPECTED_BROWSER_VERSION)expect((await browser.version()).endsWith(process.env.EXPECTED_BROWSER_VERSION)).toBe(true)
   page=await browser.newPage()
   page.on('pageerror',(error)=>errors.push(String(error)))

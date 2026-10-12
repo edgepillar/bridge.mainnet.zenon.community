@@ -63,6 +63,17 @@ jobs:
           browser_path=$(find .lab-tools -type f -name chrome-headless-shell -print -quit)
           test -n "$browser_path"
           printf 'CHROME_PATH=%s/%s\n' "$GITHUB_WORKSPACE" "$browser_path" >> "$GITHUB_ENV"
+      - name: Configure namespaces for the pinned browser sandbox
+        run: |
+          test -x "$CHROME_PATH"
+          printf '%s\n' \
+            'abi <abi/4.0>,' \
+            'include <tunables/global>' \
+            "profile bridge-qualification-browser \"$CHROME_PATH\" flags=(unconfined) {" \
+            '  userns,' \
+            '}' > .lab-tools/browser.apparmor
+          sudo install -m 0644 .lab-tools/browser.apparmor /etc/apparmor.d/bridge-qualification-browser
+          sudo apparmor_parser --replace /etc/apparmor.d/bridge-qualification-browser
       - run: npm run lab:build:native
       - name: Qualify components and both isolated chains
         run: |
@@ -83,5 +94,6 @@ jobs:
             e2e/lab/.build/manifest.json
             e2e/lab/.build/native/run-manifest.json
             e2e/.cache/compile-manifest.json
+            .lab-tools/browser.apparmor
           include-hidden-files: true
           retention-days: 14

@@ -17,7 +17,7 @@ const report = { mode: 'offline Vue component qualification', startedAt: new Dat
   browserVersion: '', checks: [], errors: [] }
 fs.mkdirSync('.browser-results', { recursive: true })
 try {
-  browser = await puppeteer.launch({ executablePath: process.env.CHROME_PATH, headless: true, args: process.env.CI ? ['--no-sandbox'] : [] })
+  browser = await puppeteer.launch({ executablePath: process.env.CHROME_PATH, headless: true })
   report.browserVersion = await browser.version()
   if (process.env.EXPECTED_BROWSER_VERSION) assert(report.browserVersion.endsWith(process.env.EXPECTED_BROWSER_VERSION), 'Browser version differs from qualification pin')
   const page = await browser.newPage()
