@@ -29,7 +29,9 @@ export async function reconcileEvm(reader: PublicClient, operation: Operation, h
   if (!current()) return false
   const payload = JSON.parse(operation.payload) as { to: string; data: string; value: string }
   if (chainId !== operation.chainId || transaction.hash.toLowerCase() !== hash.toLowerCase() || transaction.from.toLowerCase() !== operation.account.toLowerCase() ||
-    transaction.to?.toLowerCase() !== payload.to || transaction.input.toLowerCase() !== payload.data || transaction.value.toString() !== payload.value || receipt.transactionHash.toLowerCase() !== hash.toLowerCase()) throw new Error('Transaction does not match the original operation')
+    transaction.to?.toLowerCase() !== payload.to || transaction.input.toLowerCase() !== payload.data || transaction.value.toString() !== payload.value || receipt.transactionHash.toLowerCase() !== hash.toLowerCase() ||
+    transaction.blockHash?.toLowerCase() !== receipt.blockHash.toLowerCase() || transaction.blockNumber !== receipt.blockNumber ||
+    receipt.from.toLowerCase() !== operation.account.toLowerCase() || receipt.to?.toLowerCase() !== payload.to) throw new Error('Transaction does not match the original operation')
   const canonical = await reader.getBlock({ blockNumber: receipt.blockNumber })
   const height = await reader.getBlockNumber()
   if (!current() || canonical.hash?.toLowerCase() !== receipt.blockHash.toLowerCase() || height < receipt.blockNumber + BigInt(Math.max(1, confirmations) - 1)) return false

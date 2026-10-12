@@ -1,13 +1,20 @@
 // Actual Vue components with offline providers. No production RPC or wallet.
 import fs from 'node:fs'
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import puppeteer from 'puppeteer-core'
 import { createServer } from 'vite'
 if (!process.env.CHROME_PATH) throw new Error('Set CHROME_PATH to a compatible Chromium executable')
 const server = await createServer({ server: { host: '127.0.0.1', port: 5195, strictPort: true }, logLevel: 'error' })
 await server.listen()
 let browser
-const report = { mode: 'offline Vue component qualification', browserVersion: '', checks: [], errors: [] }
+const git = (args) => execFileSync('git', args).toString().trim()
+const report = { mode: 'offline Vue component qualification', startedAt: new Date().toISOString(),
+  sourceCommit: git(['rev-parse','HEAD']), sourceTree: git(['rev-parse','HEAD^{tree}']),
+  sourceDirty: git(['status','--porcelain']).length > 0,
+  lockfileHash: createHash('sha256').update(fs.readFileSync('package-lock.json')).digest('hex'),
+  browserVersion: '', checks: [], errors: [] }
 fs.mkdirSync('.browser-results', { recursive: true })
 try {
   browser = await puppeteer.launch({ executablePath: process.env.CHROME_PATH, headless: true, args: process.env.CI ? ['--no-sandbox'] : [] })
@@ -31,6 +38,7 @@ try {
   const fresh = async () => { await page.goto('http://127.0.0.1:5195/tests/browser/harness.html'); await page.waitForSelector('input[aria-label="Amount"]') }
   const input = (selector, value) => page.$eval(selector, (e, v) => { e.value = v; e.dispatchEvent(new Event('input', { bubbles: true })) }, value)
   const amount = (v) => input('input[aria-label="Amount"]', v)
+  const editRecipient = async () => {await page.click('[data-testid="bridge-advanced"]');await page.click('[data-testid="custom-recipient"]')}
   const action = () => page.$eval('[data-testid="bridge-action"]', (e) => ({ disabled: e.disabled, label: e.textContent.trim() }))
   const check = (name) => report.checks.push({ name })
   await fresh()
@@ -47,12 +55,12 @@ try {
       }
     }
   }
-  await fresh(); await page.setViewport({ width: 768, height: 900 }); await page.screenshot({ path: '.browser-results/tablet.png', fullPage: true })
+  await fresh(); await page.setViewport({ width: 768, height: 900 });await page.waitForFunction(()=>Number(getComputedStyle(document.querySelector('main section')).opacity)>=0.99); await page.screenshot({ path: '.browser-results/tablet.png', fullPage: true })
   await page.setViewport({ width: 375, height: 900 }); await page.screenshot({ path: '.browser-results/mobile.png', fullPage: true })
   await amount('1,000'); assert((await action()).disabled); check('ambiguous amount blocked')
-  await amount('2'); await page.click('[aria-label="Edit recipient"]')
+  await amount('2'); await editRecipient()
   await input('input[aria-label="Recipient"]', '0x' + '00'.repeat(20)); assert((await action()).disabled)
-  await fresh(); await page.click('[data-testid="bridge-flip"]'); await page.click('[aria-label="Edit recipient"]')
+  await fresh(); await page.click('[data-testid="bridge-flip"]'); await editRecipient()
   await input('input[aria-label="Recipient"]', await page.evaluate(() => window.__fixture.BRIDGE)); await amount('2')
   assert((await action()).disabled); check('zero and embedded recipients blocked')
   await fresh(); await amount('2'); await page.evaluate(() => { window.__fixture.bridge.health.state = 'unknown' })
@@ -70,17 +78,18 @@ try {
   assert.equal(original.operation.chainId, 1); assert.equal(original.operation.hash, 'ab'.repeat(32)); check('late response retains original amount, account, chain and hash')
   await fresh(); await page.evaluate(() => { window.__fixture.knobs.receiptReverted = true; location.hash = '#/activity' })
   await page.waitForFunction(() => document.querySelector('h1')?.textContent?.trim() === 'Activity')
+  await page.waitForFunction(()=>window.__fixture.activity.loadedOnce&&!window.__fixture.activity.loading)
   await page.evaluate(() => {
     const a = window.__fixture; a.activity.readAt = Date.now(); a.activity.error = ''
     a.activity.items = [{ key: 'reverted-fixture', context: a.activity.context, kind: 'wrap', chainId: 1, toAddress: a.evm.account, amount: 97n, symbol: 'wZNN', decimals: 8, createdAt: 1, bonus: false, sourceTx: 'ab'.repeat(32), status: { state: 'finish', label: 'Finish', tone: 'warn' },
       wrap: { id: 'ab'.repeat(32), networkClass: 2, chainId: 1, toAddress: a.evm.account, tokenStandard: 'zts1znnxxxxxxxxxxxxx9z4ulx', tokenAddress: a.evm.account, amount: 100n, fee: 3n, signature: btoa(String.fromCharCode(...new Uint8Array(65))), confirmationsToFinality: 0, creationMomentumHeight: 1 } }]
   })
-  await page.click('[data-testid="activity-action"]')
+  await page.waitForSelector('[data-testid="activity-action"]');await page.click('[data-testid="activity-action"]')
   await page.waitForFunction(() => window.__fixture.toasts.some((t) => t.tone === 'danger'), { timeout: 15_000 })
   const failed = await page.evaluate(() => ({ state: window.__fixture.operations.entries.at(-1)?.state, success: window.__fixture.toasts.some((t) => t.tone === 'ok') }))
   assert.equal(failed.state, 'reverted'); assert.equal(failed.success, false); check('reverted receipt never shows success')
   await fresh(); await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }])
-  await page.focus('[data-testid="wallet-evm"]'); await page.evaluate(() => window.__fixture.openNested())
+  await page.focus('[data-testid="wallet-menu"]'); await page.evaluate(() => window.__fixture.openNested())
   await page.waitForFunction(() => document.activeElement?.closest('[role="dialog"]')?.getAttribute('aria-label') === 'Outer fixture')
   await page.click('button::-p-text(Open inner)')
   await page.waitForFunction(() => document.activeElement?.closest('[role="dialog"]')?.getAttribute('aria-label') === 'Inner fixture')
@@ -90,9 +99,12 @@ try {
   await page.waitForFunction(() => document.activeElement?.closest('[role="dialog"]')?.getAttribute('aria-label') === 'Outer fixture')
   assert.equal(await page.evaluate(() => document.querySelector('[role="dialog"]').getAttribute('aria-modal')), 'true')
   await page.keyboard.press('Escape')
-  await page.waitForFunction(() => document.activeElement?.getAttribute('data-testid') === 'wallet-evm')
+  await page.waitForFunction(() => document.activeElement?.getAttribute('data-testid') === 'wallet-menu')
   assert.equal(await page.evaluate(() => document.querySelector('#app').inert), false)
   assert.equal(await page.evaluate(() => document.body.style.overflow), ''); check('nested focus trap, Escape ownership, background inertness and focus restoration')
+  const still=await page.$eval('canvas.starfield',(c)=>c.toDataURL())
+  await new Promise((resolve)=>setTimeout(resolve,120))
+  assert.equal(await page.$eval('canvas.starfield',(c)=>c.toDataURL()),still);check('canvas starfield stays still with reduced motion')
   await fresh()
   const second = await browser.newPage()
   await second.goto('http://127.0.0.1:5195/tests/browser/harness.html'); await second.waitForSelector('input[aria-label="Amount"]')

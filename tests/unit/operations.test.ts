@@ -103,11 +103,11 @@ describe('durable original-operation ownership', () => {
 })
 
 function reader(status: 'success' | 'reverted' = 'success') {
-  const receipt = { transactionHash: hash, status, blockNumber: 10n, blockHash: '0x' + 'ef'.repeat(32) }
+  const receipt = { transactionHash: hash, status, blockNumber: 10n, blockHash: '0x' + 'ef'.repeat(32),from:account,to:contract }
   return {
     getChainId: vi.fn(async () => 1), waitForTransactionReceipt: vi.fn(async () => receipt),
     getTransactionReceipt: vi.fn(async () => receipt),
-    getTransaction: vi.fn(async () => ({ hash, from: account, to: contract, input: '0x1234', value: 7n })),
+    getTransaction: vi.fn(async () => ({ hash, from: account, to: contract, input: '0x1234', value: 7n,blockNumber:receipt.blockNumber,blockHash:receipt.blockHash })),
     getBlock: vi.fn(async () => ({ hash: receipt.blockHash })), getBlockNumber: vi.fn(async () => 11n),
   }
 }
@@ -126,7 +126,7 @@ describe('original EVM receipt evidence', () => {
     await expect(successfulReceipt(reader('reverted') as any, 1, hash as `0x${string}`)).rejects.toThrow('reverted')
     expect(operations.entries[0].state).toBe('reverted')
   })
-  it.each(['replacement', 'wrong-chain', 'wrong-payload', 'reorg', 'missing-receipt'])('keeps %s unresolved without changing the hash', async (scenario) => {
+  it.each(['replacement', 'wrong-chain', 'wrong-payload', 'reorg', 'missing-receipt','inclusion-mismatch','receipt-account-mismatch'])('keeps %s unresolved without changing the hash', async (scenario) => {
     const { journalSubmission, operations } = await import('../../src/state/operations.ts')
     await journalSubmission(intent, () => {}, async () => hash)
     const c = reader()
@@ -135,6 +135,8 @@ describe('original EVM receipt evidence', () => {
     if (scenario === 'wrong-payload') c.getTransaction.mockResolvedValue({ ...await c.getTransaction(), value: 8n })
     if (scenario === 'reorg') c.getBlock.mockResolvedValue({ hash: '0x' + '00'.repeat(32) })
     if (scenario === 'missing-receipt') c.waitForTransactionReceipt.mockRejectedValue(new Error('timeout'))
+    if (scenario === 'inclusion-mismatch') c.getTransaction.mockResolvedValue({...await c.getTransaction(),blockNumber:9n})
+    if (scenario === 'receipt-account-mismatch') c.getTransactionReceipt.mockResolvedValue({...await c.getTransactionReceipt(),from:'0x'+'78'.repeat(20)})
     const { successfulReceipt } = await import('../../src/evm/transactions.ts')
     await expect(successfulReceipt(c as any, 1, hash as `0x${string}`)).rejects.toThrow()
     expect(operations.entries[0]).toMatchObject({ state: 'unknown', hash })

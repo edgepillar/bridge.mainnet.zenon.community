@@ -7,7 +7,7 @@ export default [
   ...vue.configs['flat/essential'],
   { files: ['**/*.vue'], languageOptions: { parserOptions: { parser: ts.parser } } },
   { rules: {
-    'vue/multi-word-component-names': ['error', { ignores: ['Address', 'Amount', 'Banner', 'Modal', 'Terms'] }],
+    'vue/multi-word-component-names': ['error', { ignores: ['Address', 'Amount', 'Banner', 'Modal', 'Terms', 'Starfield'] }],
     'eqeqeq': ['error', 'always'], 'no-eval': 'error', 'no-implied-eval': 'error', 'no-debugger': 'error',
     '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrors: 'none' }],
   } },

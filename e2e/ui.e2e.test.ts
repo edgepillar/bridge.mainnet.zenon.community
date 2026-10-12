@@ -94,6 +94,7 @@ function installWallets(cfg: { zAddress: string; zChainId: number; zNode: string
 const text = (sel: string) => page.$eval(sel, (e) => (e as HTMLElement).innerText.trim())
 const click = async (sel: string) => {
   await page.waitForSelector(sel, { visible: true })
+  await page.waitForFunction((selector)=>{const e=document.querySelector(selector) as HTMLButtonElement|null;return !!e&&!e.disabled},{timeout:120_000},sel)
   await page.click(sel)
 }
 // The list also holds requests from earlier runs, so a row is addressed by the
