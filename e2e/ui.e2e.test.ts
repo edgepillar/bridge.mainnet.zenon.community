@@ -22,7 +22,7 @@ import puppeteer, { type Browser, type Page } from 'puppeteer-core'
 import { createServer, type ViteDevServer } from 'vite'
 import { setup, PARAMS, type Deployment } from './setup.ts'
 import { TestOrchestrator } from './orchestrator.ts'
-import { EVM_CHAIN_ID, EVM_RPC, ZNN_CHAIN_ID, ZNN_WS, evmUser, mine, receiveAll, send, zAdmin, evmPublic } from './lib/lab.ts'
+import { EVM_CHAIN_ID, EVM_RPC, ZNN_CHAIN_ID, ZNN_WS, evmUser, mine, receiveAll, send, drainPublications, zAdmin, evmPublic } from './lib/lab.ts'
 import { fromBase64 } from '../src/znn/primitives.ts'
 import { erc20Abi } from '../src/evm/abi.ts'
 import type { BlockJson } from '../src/znn/block.ts'
@@ -170,9 +170,8 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  orchestrator?.stop()
-  await browser?.close()
-  await server?.close()
+  try { await orchestrator?.stop(); await drainPublications() }
+  finally { await browser?.close(); await server?.close() }
 })
 
 describe('the page on the lab', () => {

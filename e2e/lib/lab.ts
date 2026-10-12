@@ -143,6 +143,12 @@ export function send(spec: BlockSpec, account: Account = zAdmin): Promise<string
   return next
 }
 
+/** Drain original fixture jobs before closing a browser or retiring a worker. */
+export async function drainPublications(): Promise<void> {
+  await chain
+  if (fs.existsSync(publicationFile)) throw new Error('Fixture publication remains unresolved; preserve its original hash')
+}
+
 /** Receives everything waiting for `account` (a redeem's ZNN arrives as an unreceived block). */
 export async function receiveAll(account: Account = zAdmin): Promise<number> {
   const page = await znn.call<{ list: Array<{ hash: string }> | null }>('ledger.getUnreceivedBlocksByAddress', [account.address, 0, 50])

@@ -24,6 +24,7 @@ import {
   evmClock,
   receiveAll,
   send,
+  drainPublications,
   until,
   zAdmin,
   zapi,
@@ -74,7 +75,10 @@ beforeAll(async () => {
   orchestrator = new TestOrchestrator({ bridge: d.bridge, evmConfirmations: Number(PARAMS.evm.confirmations), affiliate: true, log: console.log })
 })
 
-afterAll(async () => { orchestrator?.stop(); await evmClock(1) })
+afterAll(async () => {
+  try { await orchestrator?.stop(); await drainPublications() }
+  finally { await evmClock(1) }
+})
 
 describe('setup', () => {
   it('shows the app one network and one pair, as it reads mainnet', async () => {
@@ -268,8 +272,7 @@ describe('orchestrator status, as the Stats page derives it', () => {
   })
 
   it('goes stalled when a wrap past finality stays unsigned', async () => {
-    orchestrator.stop()
-    await new Promise((r) => setTimeout(r, 4000))
+    await orchestrator.stop()
     const id = await send(wrapTokenBlock({ networkClass: NETWORK_CLASS, chainId: EVM_CHAIN_ID, toAddress: evmUser.address, tokenStandard: ZNN_ZTS, amount: 1_00000000n }))
     await until('finality', async () => (await zapi.wrapById(id))?.confirmationsToFinality === 0)
     const soon = await read()

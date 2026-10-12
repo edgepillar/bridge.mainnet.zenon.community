@@ -37,7 +37,8 @@ export class TestOrchestrator {
   private running = false
   private fromBlock = 0n
   private done = new Set<string>()
-  private ticking = false
+  private activeTick: Promise<void> | null = null
+  private loop: Promise<void> | null = null
   readonly o: OrchestratorOptions
   signedWraps = 0
   registeredUnwraps = 0
@@ -52,28 +53,36 @@ export class TestOrchestrator {
 
   /** One pass over both directions. */
   async tick(): Promise<void> {
-    if (this.ticking) return
-    this.ticking = true
-    try { await this.signWraps(); await this.registerUnwraps() } finally { this.ticking = false }
+    if (this.activeTick) return this.activeTick
+    this.activeTick = (async () => {
+      try { await this.signWraps(); await this.registerUnwraps() }
+      finally { this.activeTick = null }
+    })()
+    return this.activeTick
   }
 
   start(everyMs = 3000): void {
-    if (this.running) return
+    if (this.loop) return
     this.running = true
-    void (async () => {
-      while (this.running) {
-        try {
-          await this.tick()
-        } catch (err) {
-          this.log(`tick failed: ${(err as Error).message}`)
+    this.loop = (async () => {
+      try {
+        while (this.running) {
+          try {
+            await this.tick()
+          } catch (err) {
+            this.log(`tick failed: ${(err as Error).message}`)
+          }
+          if (this.running) await sleep(everyMs)
         }
-        await sleep(everyMs)
-      }
+      } finally { this.loop = null }
     })()
   }
 
-  stop(): void {
+  /** Keep the worker alive until its original publication/read pass settles. */
+  async stop(): Promise<void> {
     this.running = false
+    await this.loop
+    await this.activeTick
   }
 
   private async signWraps(): Promise<void> {
