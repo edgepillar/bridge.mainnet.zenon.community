@@ -1,0 +1,43 @@
+{
+  "name": "zenon-bridge-web",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "description": "Front end for the Zenon Network of Momentum multichain bridge.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "vue-tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "vitest run --config e2e/vitest.config.ts",
+    "lab:up": "bash e2e/lab/lab.sh up",
+    "lab:down": "bash e2e/lab/lab.sh down",
+    "lab:status": "bash e2e/lab/lab.sh status",
+    "lab:wipe": "bash e2e/lab/lab.sh wipe"
+  },
+  "dependencies": {
+    "@fontsource-variable/jetbrains-mono": "^5.2.5",
+    "@fontsource-variable/space-grotesk": "^5.2.5",
+    "@noble/curves": "^1.9.1",
+    "@noble/hashes": "^1.8.0",
+    "bech32": "^2.0.0",
+    "lucide-vue-next": "^0.469.0",
+    "viem": "^2.23.0",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@openzeppelin/contracts": "^4.9.6",
+    "@scure/bip39": "^1.6.0",
+    "@tailwindcss/vite": "^4.1.0",
+    "@types/node": "^22.10.0",
+    "@vitejs/plugin-vue": "^6.0.1",
+    "puppeteer-core": "^23.11.1",
+    "solc": "^0.8.26",
+    "tailwindcss": "^4.1.0",
+    "typescript": "^5.8.0",
+    "vite": "^7.1.0",
+    "vitest": "^3.2.0",
+    "vue-tsc": "^3.0.0"
+  }
+}

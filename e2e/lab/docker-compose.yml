@@ -1,0 +1,86 @@
+# The bridge lab: a go-zenon devnet with the bridge usable, and anvil beside
+# it. For the e2e tests only. Driven by ./lab.sh; see ../README.md.
+#
+# Its own project, containers, network, volumes, chain identifier and ports,
+# so it shares nothing with any other devnet on the host. After
+# syrius-extension/tools/devnet/lab.
+name: bridge-lab
+
+x-node: &node
+  image: bridge-lab-znnd:${LAB_ZNND_TAG:?run lab.sh, which sets this}
+  restart: "no"
+
+x-env: &env
+  # Read by e2e/lab/znnd/devnet_bridge.go. Consensus rules: the same on every node.
+  ZNN_DEVNET_BRIDGE: "1"
+  ZNN_BRIDGE_ADMIN: ${LAB_BRIDGE_ADMIN:?run lab.sh, which sets this}
+
+services:
+  pillar:
+    <<: *node
+    container_name: bridge-lab-pillar
+    environment: { <<: *env, ZNND_ROLE: pillar }
+    volumes: [pillar-data:/root/.znn, ./assets:/devnet:ro]
+    networks: { lab: { ipv4_address: 172.38.0.10 } }
+
+  pillar2:
+    <<: *node
+    container_name: bridge-lab-pillar2
+    depends_on: [pillar]
+    environment: { <<: *env, ZNND_ROLE: pillar2 }
+    volumes: [pillar2-data:/root/.znn, ./assets:/devnet:ro]
+    networks: { lab: { ipv4_address: 172.38.0.12 } }
+
+  pillar3:
+    <<: *node
+    container_name: bridge-lab-pillar3
+    depends_on: [pillar]
+    environment: { <<: *env, ZNND_ROLE: pillar3 }
+    volumes: [pillar3-data:/root/.znn, ./assets:/devnet:ro]
+    networks: { lab: { ipv4_address: 172.38.0.13 } }
+
+  observer:
+    <<: *node
+    container_name: bridge-lab-observer
+    depends_on: [pillar]
+    environment: { <<: *env, ZNND_ROLE: observer }
+    volumes: [observer-data:/root/.znn, ./assets:/devnet:ro]
+    networks: { lab: { ipv4_address: 172.38.0.14 } }
+
+  rpc:
+    <<: *node
+    container_name: bridge-lab-rpc
+    depends_on: [pillar, observer]
+    environment: { <<: *env, ZNND_ROLE: rpc }
+    ports:
+      - "127.0.0.1:46997:35997" # HTTP RPC
+      - "127.0.0.1:46998:35998" # WS RPC, what the page dials
+    volumes: [rpc-data:/root/.znn, ./assets:/devnet:ro]
+    networks: { lab: { ipv4_address: 172.38.0.11 } }
+
+  # The EVM side. Chain 31337, instant blocks, state kept in memory: a fresh
+  # chain every `up`, which setup.ts redeploys the contracts on.
+  anvil:
+    image: ghcr.io/foundry-rs/foundry:stable
+    container_name: bridge-lab-anvil
+    restart: "no"
+    entrypoint: ["anvil", "--host", "0.0.0.0", "--chain-id", "31337"]
+    ports:
+      - "127.0.0.1:46545:8545"
+    networks: { lab: { ipv4_address: 172.38.0.20 } }
+
+networks:
+  lab:
+    name: bridge-lab
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.38.0.0/24
+
+volumes:
+  pillar-data:
+  pillar2-data:
+  pillar3-data:
+  observer-data:
+  rpc-data:
