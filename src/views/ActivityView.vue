@@ -5,6 +5,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ArrowRight, RefreshCw, Search, X, Loader2 } from 'lucide-vue-next'
 import TokenIcon from '../components/TokenIcon.vue'
+import Modal from '../components/Modal.vue'
 import Amount from '../components/Amount.vue'
 import Address from '../components/Address.vue'
 import StatusChip from '../components/StatusChip.vue'
@@ -52,6 +53,7 @@ onMounted(() => {
 onUnmounted(() => clearInterval(timer))
 const left = (i: Item) => (i.status.eta ? activity.builtAt + i.status.eta - now.value : 0)
 
+const trackOpen = ref(false)
 const watchText = ref('')
 const watchValid = computed(() => isAddress(watchText.value.trim()) || /^0x[0-9a-fA-F]{40}$/.test(watchText.value.trim()))
 function addWatch() {
@@ -142,21 +144,24 @@ const connectedNothing = computed(() => !evm.account && !syrius.address && !acti
         <RefreshCw :size="15" :class="{ spin: activity.loading }" />
       </button>
       <div class="flex-1" />
-      <form class="flex w-full gap-2 md:w-auto" @submit.prevent="addWatch">
-        <div class="relative flex-1 md:w-80">
-          <Search :size="15" class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-dim" />
-          <input v-model="watchText" class="field mono !pl-9 text-sm" placeholder="Track z1… or 0x…" aria-label="Track an address" spellcheck="false" />
-        </div>
-        <button class="btn" :disabled="!watchValid">Track</button>
-      </form>
+      <button class="btn btn-sm" data-testid="track-open" @click="trackOpen = true">
+        <Search :size="14" />Track<span v-if="activity.watched.length" class="mono text-dim">{{ activity.watched.length }}</span>
+      </button>
     </div>
 
-    <div v-if="activity.watched.length" class="flex flex-wrap gap-2">
-      <span v-for="a in activity.watched" :key="a" class="chip chip-dim !h-8 !pr-1">
-        <span class="mono">{{ a.slice(0, 8) }}…{{ a.slice(-4) }}</span>
-        <button class="grid h-6 w-6 place-items-center rounded-full hover:bg-raised" :aria-label="'Stop tracking ' + a" @click="setWatched(activity.watched.filter((x) => x !== a))"><X :size="12" /></button>
-      </span>
-    </div>
+    <!-- Following an address without a wallet: wanted rarely, so one tap away. -->
+    <Modal :open="trackOpen" title="Track an address" @close="trackOpen = false">
+      <form class="flex gap-2" @submit.prevent="addWatch">
+        <input v-model="watchText" class="field mono text-sm" placeholder="z1… or 0x…" aria-label="Track an address" spellcheck="false" />
+        <button class="btn" :disabled="!watchValid">Track</button>
+      </form>
+      <div v-if="activity.watched.length" class="mt-3 grid gap-1">
+        <div v-for="a in activity.watched" :key="a" class="menu-row !px-0">
+          <span class="mono min-w-0 flex-1 truncate" :title="a">{{ a.slice(0, 12) }}…{{ a.slice(-6) }}</span>
+          <button class="icon-btn !h-9 !w-9" :aria-label="'Stop tracking ' + a" @click="setWatched(activity.watched.filter((x) => x !== a))"><X :size="14" /></button>
+        </div>
+      </div>
+    </Modal>
 
     <div class="tabs flex gap-1 overflow-x-auto">
       <button v-for="f in FILTERS" :key="f.id" class="tab" :class="{ active: filter === f.id }" @click="filter = f.id">
@@ -175,12 +180,8 @@ const connectedNothing = computed(() => !evm.account && !syrius.address && !acti
     <TransitionGroup v-else name="row" tag="div" class="grid gap-2">
       <article v-for="i in shown" :key="i.key" class="row panel" data-testid="activity-row" :data-kind="i.kind" :data-state="i.status.state" :data-key="i.key">
         <div class="flex min-w-0 items-center gap-3">
-          <div class="relative shrink-0">
-            <TokenIcon :symbol="i.kind === 'wrap' ? i.wrap?.token?.symbol ?? i.symbol : symbolFor(i)" :size="36" />
-            <span class="absolute -right-1 -bottom-1 rounded-full ring-2 ring-[var(--surface)]">
-              <TokenIcon :network="i.kind === 'wrap' ? evmChain(i.chainId).name : 'Zenon'" :size="16" />
-            </span>
-          </div>
+          <!-- What arrives, on the chain it arrives on. -->
+          <TokenIcon :symbol="symbolFor(i)" :chain="i.kind === 'wrap' ? evmChain(i.chainId).name : 'Zenon'" :size="40" />
           <div class="min-w-0">
             <div class="flex flex-wrap items-center gap-x-2 text-[15px]">
               <Amount :value="i.amount" :decimals="i.decimals" :symbol="symbolFor(i)" />
@@ -230,13 +231,14 @@ const connectedNothing = computed(() => !evm.account && !syrius.address && !acti
 .row {
   display: grid;
   gap: 12px;
-  padding: 14px 16px;
+  padding: 16px 18px;
   transition:
     border-color 150ms var(--ease),
     transform 150ms var(--ease);
 }
 .row:hover {
   border-color: var(--line-strong);
+  transform: translateY(-1px);
 }
 @media (min-width: 700px) {
   .row {

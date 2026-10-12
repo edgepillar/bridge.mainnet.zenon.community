@@ -9,6 +9,12 @@
     and nothing else.
   - There is no prefers-reduced-motion rule here and there must not be one:
     motion is how the page shows the chain is live (RULES.md section 4).
+
+  The shape is the owner's brief of 2026-10-12, after stargate.finance: a
+  neutral near-black page under a moving starfield, large soft cards, pill
+  buttons, and controls kept behind menus. That sets aside two Zenon rules of
+  RULES.md section 3 for this app, on purpose: the single tight radius (cards
+  are 24px, controls 14px, buttons full) and the flat still background.
 */
 
 @import 'tailwindcss';
@@ -18,12 +24,12 @@
 @custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
 
 :root {
-  --bg: #06090a;
-  --surface: #0b1113;
-  --raised: #121a1d;
-  --sunk: #04080a;
-  --line: #1a262a;
-  --line-strong: #2b3a40;
+  --bg: #0b0d0e;
+  --surface: #151819;
+  --raised: #1e2223;
+  --sunk: #101314;
+  --line: #24292a;
+  --line-strong: #343b3d;
 
   --fg: #e6efec;
   --soft: #b0c1c2;
@@ -44,7 +50,8 @@
   --edge: inset 0 1px 0 rgb(255 255 255 / 0.06);
   --shadow-panel: 0 1px 2px rgb(0 0 0 / 0.5), 0 8px 24px -12px rgb(0 0 0 / 0.7);
   --shadow-pop: 0 2px 4px rgb(0 0 0 / 0.4), 0 16px 40px -12px rgb(0 0 0 / 0.75);
-  --bar-glass: color-mix(in srgb, var(--bg) 82%, transparent);
+  --bar-glass: color-mix(in srgb, var(--bg) 60%, transparent);
+  --card-glass: color-mix(in srgb, var(--surface) 88%, transparent);
 
   --ok: var(--znn-ink);
   --wait: var(--nom-ink);
@@ -54,7 +61,8 @@
   --danger-bg: color-mix(in srgb, var(--danger) 14%, transparent);
   --new-bg: color-mix(in srgb, var(--new) 16%, transparent);
 
-  --radius: 6px;
+  --radius: 14px;
+  --radius-card: 24px;
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
   --spring: cubic-bezier(0.2, 0.8, 0.2, 1);
 
@@ -145,7 +153,7 @@
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
   }
-  /* The page colour sits on html alone, so the aurora (z-index -1) shows
+  /* The page colour sits on html alone, so the starfield (z-index -1) shows
      between it and the content. */
   body {
     background: transparent;
@@ -195,16 +203,20 @@
     color: var(--dim);
   }
 
+  /* A card lets a little of the starfield through, blurred. */
   .panel {
-    background: var(--surface);
+    background: var(--card-glass);
+    backdrop-filter: blur(10px);
     border: 1px solid var(--line);
-    border-radius: calc(var(--radius) * 2);
+    border-radius: var(--radius-card);
     box-shadow: var(--edge), var(--shadow-panel);
+    --icon-ring: var(--surface);
   }
   .well {
     background: var(--sunk);
     border: 1px solid var(--line);
     border-radius: var(--radius);
+    --icon-ring: var(--sunk);
   }
 
   /* Buttons set custom properties; modifiers only change them, so two
@@ -213,47 +225,78 @@
     --btn-bg: var(--raised);
     --btn-fg: var(--fg);
     --btn-line: var(--line-strong);
+    position: relative;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 8px;
     min-height: 44px;
-    padding: 0 16px;
-    border-radius: var(--radius);
+    padding: 0 20px;
+    border-radius: 999px;
     border: 1px solid var(--btn-line);
     background: var(--btn-bg);
     color: var(--btn-fg);
     font-weight: 500;
     font-size: 15px;
     transition:
-      background 150ms var(--ease),
-      border-color 150ms var(--ease),
-      transform 150ms var(--ease),
-      box-shadow 150ms var(--ease),
-      filter 150ms var(--ease);
+      background 180ms var(--ease),
+      color 180ms var(--ease),
+      border-color 180ms var(--ease),
+      transform 220ms var(--spring),
+      box-shadow 220ms var(--ease),
+      filter 180ms var(--ease),
+      opacity 180ms var(--ease);
     white-space: nowrap;
+    -webkit-tap-highlight-color: transparent;
   }
   .btn:hover:not(:disabled) {
     --btn-line: var(--dim);
+    transform: translateY(-1px);
   }
   .btn:active:not(:disabled) {
-    transform: translateY(1px);
+    transform: scale(0.97);
+    transition-duration: 80ms;
   }
   .btn:disabled {
     opacity: 0.45;
     cursor: not-allowed;
   }
+  /* The main action: plasma, with a light that sweeps across on hover. */
   .btn-plasma {
     --btn-bg: var(--plasma);
     --btn-fg: var(--on-plasma);
     --btn-line: transparent;
+    overflow: hidden;
     font-weight: 600;
-    box-shadow: 0 6px 24px -10px color-mix(in srgb, var(--znn) 70%, transparent);
+    box-shadow: 0 8px 28px -12px color-mix(in srgb, var(--znn) 75%, transparent);
+  }
+  .btn-plasma::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(105deg, transparent 35%, rgb(255 255 255 / 0.35) 50%, transparent 65%);
+    transform: translateX(-120%);
+    transition: transform 700ms var(--ease);
+    pointer-events: none;
+  }
+  .btn-plasma:hover:not(:disabled)::after {
+    transform: translateX(120%);
   }
   .btn-plasma:hover:not(:disabled) {
     --btn-line: transparent;
-    filter: brightness(1.06) saturate(1.05);
-    box-shadow: 0 8px 30px -8px color-mix(in srgb, var(--znn) 80%, transparent);
+    filter: brightness(1.05) saturate(1.05);
+    box-shadow: 0 12px 36px -10px color-mix(in srgb, var(--znn) 85%, transparent);
+  }
+  /* The header's one solid button, in the text colour. */
+  .btn-fg {
+    --btn-bg: var(--fg);
+    --btn-fg: var(--bg);
+    --btn-line: transparent;
+    font-weight: 600;
+  }
+  .btn-fg:hover:not(:disabled) {
+    --btn-line: transparent;
+    box-shadow: 0 8px 24px -12px color-mix(in srgb, var(--fg) 60%, transparent);
   }
   .btn-ghost {
     --btn-bg: transparent;
@@ -265,10 +308,73 @@
     --btn-line: transparent;
     --btn-fg: var(--fg);
   }
+  /* A round button holding one icon. */
+  .icon-btn {
+    display: inline-grid;
+    flex-shrink: 0;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    border: 1px solid var(--line);
+    background: transparent;
+    color: var(--soft);
+    transition:
+      color 180ms var(--ease),
+      background 180ms var(--ease),
+      border-color 180ms var(--ease),
+      transform 220ms var(--spring);
+  }
+  .icon-btn:hover:not(:disabled) {
+    color: var(--fg);
+    background: var(--raised);
+    border-color: var(--line-strong);
+    transform: translateY(-1px);
+  }
+  .icon-btn:active:not(:disabled) {
+    transform: scale(0.94);
+    transition-duration: 80ms;
+  }
   .btn-sm {
     min-height: 36px;
-    padding: 0 12px;
+    padding: 0 14px;
     font-size: 14px;
+  }
+  /* A row in a menu: label left, control right. */
+  .menu-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 44px;
+    padding: 0 10px;
+    border-radius: var(--radius);
+    font-size: 14px;
+    color: var(--soft);
+    text-align: left;
+    transition:
+      background 150ms var(--ease),
+      color 150ms var(--ease);
+  }
+  button.menu-row:hover:not(:disabled),
+  a.menu-row:hover {
+    background: var(--raised);
+    color: var(--fg);
+  }
+  .popover {
+    position: absolute;
+    z-index: 41;
+    padding: 8px;
+    border-radius: 20px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    box-shadow: var(--edge), var(--shadow-pop);
+    --icon-ring: var(--surface);
+  }
+  .backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
   }
   .btn-block {
     width: 100%;
@@ -318,7 +424,9 @@
     border: 1px solid var(--line);
     border-radius: var(--radius);
     color: var(--fg);
-    transition: border-color 150ms var(--ease);
+    transition:
+      border-color 150ms var(--ease),
+      box-shadow 150ms var(--ease);
   }
   .field:hover {
     border-color: var(--line-strong);
@@ -326,6 +434,7 @@
   .field:focus {
     outline: none;
     border-color: var(--znn-ink);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--znn) 18%, transparent);
   }
   .field::placeholder {
     color: var(--dim);
@@ -339,68 +448,6 @@
   }
   .link:hover {
     text-decoration-color: currentColor;
-  }
-}
-
-/* The page background: three soft lights in the brand's green and blue,
-   drifting slowly behind everything. The owner asked for a background that is
-   not plain and moves a little, which sets aside RULES.md section 3's flat
-   backgrounds for this app. Transforms only, so it costs a composite, and
-   faint enough that panels and text keep their contrast in both themes. */
-.aurora {
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  overflow: hidden;
-  pointer-events: none;
-  --glow: 16%;
-}
-:root[data-theme='light'] .aurora {
-  --glow: 11%;
-}
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme='dark']) .aurora {
-    --glow: 11%;
-  }
-}
-.aurora i {
-  position: absolute;
-  width: 70vmax;
-  height: 70vmax;
-  border-radius: 50%;
-  will-change: transform;
-}
-.aurora i:nth-child(1) {
-  top: -30vmax;
-  left: -20vmax;
-  background: radial-gradient(closest-side, color-mix(in srgb, var(--znn) var(--glow), transparent), transparent);
-  animation: drift-a 38s ease-in-out infinite alternate;
-}
-.aurora i:nth-child(2) {
-  top: -10vmax;
-  right: -30vmax;
-  background: radial-gradient(closest-side, color-mix(in srgb, var(--nom) var(--glow), transparent), transparent);
-  animation: drift-b 46s ease-in-out infinite alternate;
-}
-.aurora i:nth-child(3) {
-  bottom: -40vmax;
-  left: 20vw;
-  background: radial-gradient(closest-side, color-mix(in srgb, var(--znn) calc(var(--glow) * 0.6), transparent), transparent);
-  animation: drift-c 54s ease-in-out infinite alternate;
-}
-@keyframes drift-a {
-  to {
-    transform: translate3d(18vw, 12vh, 0) scale(1.15);
-  }
-}
-@keyframes drift-b {
-  to {
-    transform: translate3d(-22vw, 18vh, 0) scale(0.9);
-  }
-}
-@keyframes drift-c {
-  to {
-    transform: translate3d(-14vw, -16vh, 0) scale(1.2);
   }
 }
 
@@ -528,4 +575,19 @@
 .fade-leave-to {
   opacity: 0;
   transform: translateY(4px);
+}
+.pop-enter-active {
+  transition:
+    opacity 160ms var(--ease),
+    transform 240ms var(--spring);
+}
+.pop-leave-active {
+  transition:
+    opacity 120ms var(--ease),
+    transform 120ms var(--ease);
+}
+.pop-enter-from,
+.pop-leave-to {
+  opacity: 0;
+  transform: translateY(-6px) scale(0.97);
 }

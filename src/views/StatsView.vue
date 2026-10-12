@@ -212,7 +212,7 @@ const momentumTime = computed(() => bridge.orch?.estimatedMomentumTime || 10)
           <tbody>
             <tr v-for="r in bridge.routes.filter((x) => x.chainId === n.chainId)" :key="r.key">
               <td>
-                <span class="inline-flex items-center gap-2"><TokenIcon :symbol="r.zts?.symbol" :size="20" />{{ r.zts?.symbol ?? '?' }}</span>
+                <span class="inline-flex items-center gap-2"><TokenIcon :symbol="r.zts?.symbol" chain="Zenon" :size="24" />{{ r.zts?.symbol ?? '?' }}</span>
               </td>
               <td>
                 <a
@@ -221,7 +221,7 @@ const momentumTime = computed(() => bridge.orch?.estimatedMomentumTime || 10)
                   target="_blank"
                   rel="noopener"
                   :title="r.pair.tokenAddress"
-                  ><TokenIcon :symbol="r.evm?.symbol" :size="20" />{{ r.evm?.symbol ?? '?' }}</a
+                  ><TokenIcon :symbol="r.evm?.symbol" :chain="n.name" :size="24" />{{ r.evm?.symbol ?? '?' }}</a
                 >
               </td>
               <td class="num mono">{{ r.pair.feePercentage / 100 }}%</td>

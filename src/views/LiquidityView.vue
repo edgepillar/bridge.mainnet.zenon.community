@@ -5,7 +5,7 @@
 //   3. stake it in Zenon's liquidity contract for 1 to 12 months, weighted 1x
 //      to 12x, then revoke after expiry and collect rewards.
 import { computed, onMounted, ref, watch } from 'vue'
-import { Plus, ArrowRight, Loader2, Lock, Unlock, Coins } from 'lucide-vue-next'
+import { Plus, ArrowRight, Loader2, Lock, Unlock, Coins, SlidersHorizontal } from 'lucide-vue-next'
 import TokenIcon from '../components/TokenIcon.vue'
 import Amount from '../components/Amount.vue'
 import StatusChip from '../components/StatusChip.vue'
@@ -50,6 +50,7 @@ const reserves = ref<{ znn: bigint; eth: bigint; lpSupply: bigint } | null>(null
 const balances = ref<{ znn: bigint; eth: bigint; lp: bigint; allowance: bigint } | null>(null)
 const znnText = ref('')
 const slippage = ref(1)
+const slippageOpen = ref(false)
 const adding = ref(false)
 
 async function loadPool() {
@@ -261,12 +262,15 @@ watch(
     <div class="grid gap-4 md:grid-cols-3">
       <!-- Step 1 -->
       <div v-if="pool" class="panel grid min-w-0 grid-cols-1 content-start gap-3 p-4 md:p-5">
-        <div class="flex items-center gap-2"><span class="step">1</span><h2 class="font-semibold">Add liquidity</h2></div>
+        <div class="flex items-center gap-2">
+          <span class="step">1</span><h2 class="flex-1 font-semibold">Add liquidity</h2>
+          <button class="icon-btn !h-9 !w-9" aria-label="Slippage" :aria-expanded="slippageOpen" @click="slippageOpen = !slippageOpen"><SlidersHorizontal :size="15" /></button>
+        </div>
         <div class="text-sm text-dim">Uniswap V2 · {{ evmChain(poolChainId).name }}</div>
         <div class="well grid grid-cols-1 gap-2 p-3">
           <div class="flex items-center gap-2">
             <input v-model="znnText" class="amount mono w-0 min-w-0 flex-1" inputmode="decimal" placeholder="0" aria-label="wZNN amount" />
-            <span class="inline-flex items-center gap-1.5"><TokenIcon symbol="wZNN" :size="20" />wZNN</span>
+            <span class="inline-flex items-center gap-2.5"><TokenIcon symbol="wZNN" :chain="evmChain(poolChainId).name" :size="28" />wZNN</span>
           </div>
           <div class="text-xs text-dim">
             Balance <Amount :value="balances?.znn ?? 0n" :decimals="8" />
@@ -281,7 +285,7 @@ watch(
           <span class="text-dim">LP out</span>
           <Amount :value="lpOut" :decimals="18" :max="10" />
         </div>
-        <div class="flex items-center justify-between gap-2 text-sm">
+        <div v-if="slippageOpen" class="slide-down flex items-center justify-between gap-2 text-sm">
           <span class="text-dim">Slippage</span>
           <span class="inline-flex gap-1">
             <button v-for="s in [0.5, 1, 3]" :key="s" class="chip !h-8 !px-3" :class="slippage === s ? 'chip-ok' : 'chip-dim'" @click="slippage = s">{{ s }}%</button>
@@ -315,7 +319,7 @@ watch(
         <div class="well grid grid-cols-1 gap-2 p-3">
           <div class="flex items-center gap-2">
             <input v-model="stakeText" class="amount mono w-0 min-w-0 flex-1" inputmode="decimal" placeholder="0" aria-label="LP amount" />
-            <span class="text-sm">{{ lpToken(stakeZts)?.symbol ?? 'LP' }}</span>
+            <span class="inline-flex items-center gap-2.5 text-sm"><TokenIcon :symbol="lpToken(stakeZts)?.symbol ?? 'LP'" chain="Zenon" :size="28" />{{ lpToken(stakeZts)?.symbol ?? 'LP' }}</span>
           </div>
           <div class="text-xs text-dim">
             Balance <Amount :value="stakeBalance" :decimals="stakeDecimals" :max="10" />

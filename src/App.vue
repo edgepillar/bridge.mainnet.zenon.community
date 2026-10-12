@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { Sun, Moon } from 'lucide-vue-next'
+import { computed, ref, watch, type Component } from 'vue'
+import { Sun, Moon, Ellipsis, ArrowLeftRight, History, Droplets, ChartNoAxesColumn, Gift, Github } from 'lucide-vue-next'
 import WalletBar from './components/WalletBar.vue'
+import Starfield from './components/Starfield.vue'
 import Banner from './components/Banner.vue'
 import Address from './components/Address.vue'
 import StatusChip from './components/StatusChip.vue'
@@ -11,7 +12,7 @@ import LiquidityView from './views/LiquidityView.vue'
 import StatsView from './views/StatsView.vue'
 import AffiliateView from './views/AffiliateView.vue'
 import zenonMark from './assets/zenon.svg'
-import { route, ROUTES, go } from './state/router.ts'
+import { route, ROUTES, go, type Route } from './state/router.ts'
 import { theme, toggleTheme } from './state/theme.ts'
 import { node, syrius, wrongZenonChain, hostOf, chainId, networkLabel, requestWalletNode, walletNode } from './state/zenon.ts'
 import { bridge, bridgeDown } from './state/bridge.ts'
@@ -22,7 +23,11 @@ import { zenonNetworkName } from './config.ts'
 
 const views = { bridge: BridgeView, activity: ActivityView, liquidity: LiquidityView, stats: StatsView, affiliate: AffiliateView }
 const current = computed(() => views[route.value])
+// A phone's tab bar has room for a mark, not for five words.
+const ICONS: Record<Route, Component> = { bridge: ArrowLeftRight, activity: History, liquidity: Droplets, stats: ChartNoAxesColumn, affiliate: Gift }
+const hrefOf = (id: Route) => (id === 'bridge' ? '#/' : '#/' + id)
 
+const more = ref(false)
 const flash = ref(false)
 watch(
   () => node.height,
@@ -37,6 +42,8 @@ watch(
   () => (noticeHidden.value = false),
 )
 const downMessage = computed(() => {
+  // Stalled: the banner says what it means for the user; Stats has the detail.
+  if (bridge.health?.state === 'down') return 'New transfers will wait too.'
   if (bridge.health?.message && bridgeDown()) return bridge.health.message
   if (bridge.info?.halted) return 'The bridge is halted. Transfers are paused.'
   if (bridge.info?.allowKeyGen) return 'Orchestrators are generating a new key. Transfers wait until it is done.'
@@ -55,51 +62,48 @@ const status = computed(() => {
 
 <template>
   <div class="flex min-h-dvh flex-col">
-    <div class="aurora" aria-hidden="true"><i /><i /><i /></div>
+    <Starfield />
     <header class="bar sticky top-0 z-30">
-      <div class="mx-auto flex h-16 max-w-6xl items-center gap-2 px-4 md:gap-6 md:px-8">
-        <a href="#/" class="flex shrink-0 items-center gap-2.5" @click.prevent="go('bridge')">
-          <img :src="zenonMark" width="28" height="28" alt="" />
-          <span class="hidden text-[17px] font-semibold tracking-tight md:inline">Bridge</span>
+      <div class="mx-auto flex h-[72px] max-w-6xl items-center gap-2 px-4 md:gap-5 md:px-8">
+        <a href="#/" class="brand" @click.prevent="go('bridge')">
+          <img :src="zenonMark" width="30" height="30" alt="" />
+          <span class="hidden text-[19px] font-semibold tracking-tight md:inline">Bridge</span>
         </a>
         <a href="#/stats" class="status" data-testid="bridge-status" :title="'Bridge status: ' + status.label">
           <StatusChip :tone="status.tone" :label="status.label" :spin="status.spin" />
         </a>
         <span v-if="chainId() !== 1" class="chip chip-warn mono hidden sm:inline-flex" data-testid="network-chip">{{ networkLabel() }} {{ chainId() }}</span>
-        <nav class="hidden items-center gap-1 md:flex">
-          <a
-            v-for="r in ROUTES"
-            :key="r.id"
-            :href="r.id === 'bridge' ? '#/' : '#/' + r.id"
-            class="nav-link"
-            :class="{ active: route === r.id }"
-          >
+        <nav class="ml-2 hidden items-center gap-1 md:flex">
+          <a v-for="r in ROUTES" :key="r.id" :href="hrefOf(r.id)" class="nav-link" :class="{ active: route === r.id }">
             {{ r.label }}<span v-if="r.id === 'activity' && actionCount()" class="dot-count">{{ actionCount() }}</span>
           </a>
         </nav>
         <div class="flex-1" />
-        <a
-          href="#/stats"
-          class="momentum hidden items-center gap-2 sm:flex"
-          :class="node.conn === 'open' ? 'text-ok' : 'text-warn'"
-          :title="'Momentum height, read from ' + hostOf(node.url)"
-        >
-          <span class="live-dot" />
-          <span class="mono text-sm text-soft" :class="{ flash }">{{ node.height ? node.height.toLocaleString('en-US') : '…' }}</span>
-        </a>
         <WalletBar />
-        <button class="btn btn-ghost btn-sm !w-11 !px-0" :aria-label="theme === 'dark' ? 'Light theme' : 'Dark theme'" @click="toggleTheme">
-          <Sun v-if="theme === 'dark'" :size="18" /><Moon v-else :size="18" />
-        </button>
+        <div class="relative">
+          <button class="icon-btn" aria-label="More" :aria-expanded="more" data-testid="more-menu" @click="more = !more"><Ellipsis :size="18" /></button>
+          <div v-if="more" class="backdrop" @click="more = false" />
+          <Transition name="pop">
+            <div v-if="more" class="popover more">
+              <button class="menu-row" @click="toggleTheme">
+                <Sun v-if="theme === 'dark'" :size="15" /><Moon v-else :size="15" />
+                <span class="flex-1">{{ theme === 'dark' ? 'Light theme' : 'Dark theme' }}</span>
+              </button>
+              <a class="menu-row" href="#/stats" :title="'Read from ' + hostOf(node.url)" @click="more = false">
+                <span class="live-dot" :class="node.conn === 'open' ? 'text-ok' : 'text-warn'" />
+                <span class="flex-1">Momentum</span>
+                <span class="mono text-soft" :class="{ flash }">{{ node.height ? node.height.toLocaleString('en-US') : '…' }}</span>
+              </a>
+              <a class="menu-row" href="https://github.com/sol-znn/bridge.mainnet.zenon.community" target="_blank" rel="noopener">
+                <Github :size="15" /><span class="flex-1">Source</span>
+              </a>
+            </div>
+          </Transition>
+        </div>
       </div>
-      <nav class="tabs flex gap-1 overflow-x-auto px-4 pb-2 md:hidden">
-        <a v-for="r in ROUTES" :key="r.id" :href="r.id === 'bridge' ? '#/' : '#/' + r.id" class="nav-link" :class="{ active: route === r.id }">
-          {{ r.label }}<span v-if="r.id === 'activity' && actionCount()" class="dot-count">{{ actionCount() }}</span>
-        </a>
-      </nav>
     </header>
 
-    <div class="mx-auto mt-4 grid w-full max-w-6xl gap-2 px-4 md:px-8">
+    <div class="mx-auto mt-2 grid w-full max-w-[640px] grid-cols-1 gap-2 px-4">
       <Banner v-if="downMessage && route !== 'stats'" tone="danger">
         <strong>{{ networkLabel() }} bridge is down.</strong> {{ downMessage }}
         <template #action><a href="#/stats" class="btn btn-ghost btn-sm -my-1 !text-inherit">Status</a></template>
@@ -121,15 +125,23 @@ const status = computed(() => {
       </Banner>
     </div>
 
-    <main class="mx-auto w-full max-w-6xl flex-1 px-4 pt-6 pb-16 md:px-8">
+    <main class="mx-auto w-full max-w-6xl flex-1 px-4 pt-6 pb-28 md:px-8 md:pb-16">
       <Transition name="fade" mode="out-in">
         <component :is="current" :key="route" />
       </Transition>
     </main>
 
+    <!-- A phone navigates from the bottom, where the thumb is. -->
+    <nav class="dock md:hidden" aria-label="Sections">
+      <a v-for="r in ROUTES" :key="r.id" :href="hrefOf(r.id)" class="dock-link" :class="{ active: route === r.id }" :aria-label="r.label">
+        <component :is="ICONS[r.id]" :size="20" />
+        <span v-if="r.id === 'activity' && actionCount()" class="dot-count dock-count">{{ actionCount() }}</span>
+      </a>
+    </nav>
+
     <div class="toasts" aria-live="polite">
       <TransitionGroup name="fade">
-        <div v-for="t in toasts" :key="t.id" class="toast panel" :class="'toast-' + t.tone" @click="dismiss(t.id)">
+        <div v-for="t in toasts" :key="t.id" class="toast" :class="'toast-' + t.tone" @click="dismiss(t.id)">
           <span>{{ t.text }}</span>
           <a v-if="t.link" :href="t.link.href" target="_blank" rel="noopener" class="link ml-2" @click.stop>{{ t.link.label }}</a>
         </div>
@@ -139,42 +151,67 @@ const status = computed(() => {
 </template>
 
 <style scoped>
-.bar {
-  background: var(--bar-glass);
-  backdrop-filter: blur(14px) saturate(1.4);
-  border-bottom: 1px solid var(--line);
+/* The header floats on the starfield: no line under it, only a blur for the
+   content that scrolls beneath. */
+.bar::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: linear-gradient(var(--bar-glass), transparent);
+  backdrop-filter: blur(8px);
+  -webkit-mask-image: linear-gradient(#000 60%, transparent);
+  mask-image: linear-gradient(#000 60%, transparent);
+  pointer-events: none;
+}
+.brand {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  transition: transform 220ms var(--spring);
+}
+.brand:hover {
+  transform: scale(1.03);
 }
 .nav-link {
   position: relative;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 40px;
+  min-height: 44px;
   padding: 0 12px;
-  border-radius: var(--radius);
-  color: var(--soft);
+  border-radius: 999px;
+  color: var(--dim);
   font-size: 15px;
   white-space: nowrap;
-  transition:
-    color 150ms var(--ease),
-    background 150ms var(--ease);
+  transition: color 180ms var(--ease);
 }
 .nav-link:hover {
   color: var(--fg);
-  background: var(--raised);
 }
 .nav-link.active {
   color: var(--fg);
 }
-.nav-link.active::after {
+.nav-link::after {
   content: '';
   position: absolute;
-  left: 12px;
-  right: 12px;
-  bottom: 2px;
-  height: 2px;
-  border-radius: 2px;
-  background: var(--plasma);
+  left: 50%;
+  bottom: 6px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--znn);
+  opacity: 0;
+  transform: translateX(-50%) scale(0);
+  transition:
+    opacity 180ms var(--ease),
+    transform 260ms var(--spring);
+}
+.nav-link.active::after {
+  opacity: 1;
+  transform: translateX(-50%) scale(1);
 }
 .dot-count {
   display: inline-grid;
@@ -189,28 +226,66 @@ const status = computed(() => {
   font-size: 11px;
   font-weight: 600;
 }
-.tabs {
-  scrollbar-width: none;
-}
-.momentum {
-  min-height: 44px;
-  padding: 0 4px;
-}
 .status {
   display: inline-flex;
   flex-shrink: 0;
   align-items: center;
   min-height: 44px;
 }
+.more {
+  right: 0;
+  top: calc(100% + 10px);
+  width: 240px;
+}
+.dock {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  left: 12px;
+  z-index: 30;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 4px;
+  padding: 6px;
+  border-radius: 22px;
+  background: color-mix(in srgb, var(--surface) 86%, transparent);
+  backdrop-filter: blur(14px);
+  border: 1px solid var(--line);
+  box-shadow: var(--edge), var(--shadow-pop);
+}
 @media (min-width: 700px) {
-  .status {
-    margin-left: -12px;
+  .dock {
+    display: none;
   }
+}
+.dock-link {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: 48px;
+  border-radius: 16px;
+  color: var(--dim);
+  transition:
+    color 180ms var(--ease),
+    background 180ms var(--ease),
+    transform 220ms var(--spring);
+}
+.dock-link:active {
+  transform: scale(0.92);
+}
+.dock-link.active {
+  color: var(--znn-ink);
+  background: var(--ok-bg);
+}
+.dock-count {
+  position: absolute;
+  top: 6px;
+  right: calc(50% - 22px);
 }
 .toasts {
   position: fixed;
   right: 16px;
-  bottom: 16px;
+  bottom: 88px;
   left: 16px;
   z-index: 60;
   display: grid;
@@ -218,11 +293,19 @@ const status = computed(() => {
   gap: 8px;
   pointer-events: none;
 }
+@media (min-width: 700px) {
+  .toasts {
+    bottom: 20px;
+  }
+}
 .toast {
   pointer-events: auto;
   max-width: 420px;
-  padding: 12px 14px;
+  padding: 12px 16px;
   font-size: 14px;
+  border-radius: 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
   border-left: 3px solid var(--dim);
   box-shadow: var(--edge), var(--shadow-pop);
   cursor: pointer;

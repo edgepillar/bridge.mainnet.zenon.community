@@ -1,8 +1,11 @@
 <script setup lang="ts">
-// The two wallets, side by side: Syrius for Zenon, any EIP-6963 wallet for EVM.
-import { computed, ref } from 'vue'
-import { Wallet, LogOut, ChevronDown, Download, Loader2 } from 'lucide-vue-next'
+// One button for both wallets: Syrius for Zenon, any EIP-6963 wallet for EVM.
+// The menu behind it holds each wallet's address and its controls, and, one
+// level further in, which node the page reads from.
+import { computed, ref, watch } from 'vue'
+import { Wallet, LogOut, Repeat, Download, Loader2, ChevronDown, Server } from 'lucide-vue-next'
 import Modal from './Modal.vue'
+import Address from './Address.vue'
 import TokenIcon from './TokenIcon.vue'
 import syriusLogo from '../assets/syrius-logo.svg'
 import {
@@ -25,10 +28,10 @@ import { shorten } from '../core/format.ts'
 import { toastError } from '../state/toasts.ts'
 import type { DiscoveredWallet } from '../wallet/eip6963.ts'
 
-const menu = ref<'' | 'znn' | 'evm'>('')
+const open = ref(false)
+const nodeOpen = ref(false)
 
 async function onSyrius() {
-  if (syrius.address) return void (menu.value = menu.value === 'znn' ? '' : 'znn')
   if (!syrius.present) return window.open('https://github.com/DexterLabZ/syrius-extension/releases', '_blank', 'noopener')
   try {
     await connectSyrius()
@@ -46,60 +49,101 @@ async function pick(w: DiscoveredWallet) {
   }
 }
 
-function onEvm() {
-  if (evm.account) menu.value = menu.value === 'evm' ? '' : 'evm'
-  else evm.pickerOpen = true
+function openPicker() {
+  open.value = false
+  evm.pickerOpen = true
 }
 
 function toggleNode() {
   if (node.source === 'wallet') useDefaultNode()
   else void requestWalletNode()
 }
+// The confirmation is a dialog of its own; the menu steps aside for it.
+watch(
+  () => walletNode.pending,
+  (p) => p && (open.value = false),
+)
 
 const chainName = computed(() => (evm.chainId ? evmChain(evm.chainId).name : ''))
+const count = computed(() => Number(!!syrius.address) + Number(!!evm.account))
+const label = computed(() => {
+  if (syrius.hold) return `${syrius.hold}s`
+  if (count.value === 1) return shorten(syrius.address ?? evm.account ?? '', 5, 4)
+  return ''
+})
 </script>
 
 <template>
-  <div class="relative flex items-center gap-2">
-    <button data-testid="wallet-zenon" class="btn btn-sm wallet" :aria-label="syrius.address ? 'Syrius ' + syrius.address : 'Syrius'" :class="{ connected: syrius.address }" :disabled="syrius.busy" @click="onSyrius">
-      <img :src="syriusLogo" width="18" height="18" alt="" class="rounded-sm" />
-      <span v-if="syrius.hold" class="mono">{{ syrius.hold }}s</span>
-      <span v-else-if="syrius.address" class="mono hidden md:inline">{{ shorten(syrius.address, 5, 4) }}</span>
-      <span v-else-if="syrius.present">Syrius</span>
-      <span v-else class="inline-flex items-center gap-1"><Download :size="14" />Syrius</span>
-    </button>
-    <button data-testid="wallet-evm" class="btn btn-sm wallet" :aria-label="evm.account ? 'EVM wallet ' + evm.account : 'EVM wallet'" :class="{ connected: evm.account }" :disabled="evm.busy" @click="onEvm">
-      <img v-if="evm.selected?.info.icon" :src="evm.selected.info.icon" width="18" height="18" alt="" />
-      <TokenIcon v-else-if="evm.account" :network="chainName" :size="18" />
-      <Wallet v-else :size="16" />
-      <span v-if="evm.account" class="mono hidden md:inline">{{ shorten(evm.account, 5, 4) }}</span>
-      <span v-else>EVM</span>
+  <div class="relative">
+    <button
+      data-testid="wallet-menu"
+      class="btn btn-sm !min-h-[44px]"
+      :class="count ? 'connected' : 'btn-fg'"
+      :aria-expanded="open"
+      :aria-label="count ? 'Wallets' : 'Connect wallet'"
+      @click="open = !open"
+    >
+      <template v-if="count">
+        <span class="stack">
+          <img v-if="syrius.address" :src="syriusLogo" width="20" height="20" alt="" class="rounded-md" />
+          <template v-if="evm.account">
+            <img v-if="evm.selected?.info.icon" :src="evm.selected.info.icon" width="20" height="20" alt="" class="rounded-md" />
+            <TokenIcon v-else :network="chainName" :size="20" />
+          </template>
+        </span>
+        <span v-if="label" class="mono hidden md:inline">{{ label }}</span>
+        <ChevronDown :size="14" class="chev text-dim" :class="{ up: open }" />
+      </template>
+      <template v-else><span class="md:hidden">Connect</span><span class="hidden md:inline">Connect wallet</span></template>
     </button>
 
-    <Transition name="fade">
-      <div v-if="menu" class="menu panel" @mouseleave="menu = ''">
-        <template v-if="menu === 'znn' && syrius.address">
-          <div class="label mb-1">Zenon</div>
-          <div class="mono break-all text-sm">{{ syrius.address }}</div>
-          <div class="label mt-4 mb-1">Node</div>
-          <div class="flex items-center gap-2">
-            <span class="mono min-w-0 flex-1 truncate text-sm" :title="node.url">{{ hostOf(node.url) }}</span>
-            <span class="chip chip-dim mono">{{ networkLabel() }} {{ chainId() }}</span>
+    <div v-if="open" class="backdrop" data-testid="wallet-backdrop" @click="open = false" />
+    <Transition name="pop">
+      <div v-if="open" class="popover menu">
+        <div data-testid="wallet-zenon" class="wallet-row">
+          <img :src="syriusLogo" width="32" height="32" alt="" class="rounded-lg" />
+          <div class="min-w-0 flex-1">
+            <div class="label">Zenon</div>
+            <Address v-if="syrius.address" :value="syrius.address" class="text-sm" />
+            <div v-else class="text-sm text-soft">Syrius</div>
           </div>
-          <button class="node-switch" data-testid="node-switch" :disabled="walletNode.checking" @click="toggleNode">
+          <button v-if="syrius.address" class="icon-btn sm" aria-label="Disconnect Syrius" @click="disconnectSyrius"><LogOut :size="15" /></button>
+          <button v-else data-testid="wallet-zenon-connect" class="btn btn-sm" :disabled="syrius.busy" @click="onSyrius">
+            <Loader2 v-if="syrius.busy" :size="14" class="spin" /><Download v-else-if="!syrius.present" :size="14" />
+            {{ syrius.hold ? syrius.hold + 's' : syrius.present ? 'Connect' : 'Install' }}
+          </button>
+        </div>
+
+        <div data-testid="wallet-evm" class="wallet-row">
+          <img v-if="evm.selected?.info.icon" :src="evm.selected.info.icon" width="32" height="32" alt="" class="rounded-lg" />
+          <span v-else class="grid h-8 w-8 place-items-center rounded-lg bg-raised text-soft"><Wallet :size="16" /></span>
+          <div class="min-w-0 flex-1">
+            <div class="label truncate">{{ evm.account ? chainName || 'EVM' : 'EVM' }}</div>
+            <Address v-if="evm.account" :value="evm.account" class="text-sm" />
+            <div v-else class="text-sm text-soft">MetaMask, Rabby, Phantom</div>
+          </div>
+          <template v-if="evm.account">
+            <button class="icon-btn sm" aria-label="Switch wallet" @click="openPicker"><Repeat :size="15" /></button>
+            <button class="icon-btn sm" aria-label="Disconnect EVM wallet" @click="disconnectEvm"><LogOut :size="15" /></button>
+          </template>
+          <button v-else data-testid="wallet-evm-connect" class="btn btn-sm" :disabled="evm.busy" @click="openPicker">Connect</button>
+        </div>
+
+        <div class="my-1 border-t border-line" />
+        <button class="menu-row" data-testid="node-toggle" :aria-expanded="nodeOpen" @click="nodeOpen = !nodeOpen">
+          <Server :size="15" /><span class="flex-1">Node</span>
+          <span class="chip chip-dim mono">{{ networkLabel() }} {{ chainId() }}</span>
+          <ChevronDown :size="14" class="chev" :class="{ up: nodeOpen }" />
+        </button>
+        <div v-if="nodeOpen" class="slide-down px-2.5 pb-1">
+          <div class="mono truncate text-sm text-soft" :title="node.url">{{ hostOf(node.url) }}</div>
+          <button class="node-switch" data-testid="node-switch" :disabled="walletNode.checking || !syrius.address" @click="toggleNode">
             <span class="flex-1 text-left">Use Syrius node</span>
             <Loader2 v-if="walletNode.checking" :size="15" class="spin text-dim" />
             <span class="switch" role="switch" :aria-checked="node.source === 'wallet'" />
           </button>
-          <div v-if="walletNode.problem" class="text-sm text-warn">{{ walletNode.problem }}</div>
-          <button class="btn btn-ghost btn-sm btn-block mt-3 !justify-start" @click="(disconnectSyrius(), (menu = ''))"><LogOut :size="15" />Disconnect</button>
-        </template>
-        <template v-if="menu === 'evm' && evm.account">
-          <div class="label mb-1">{{ evm.selected?.info.name }} · {{ chainName }}</div>
-          <div class="mono break-all text-sm">{{ evm.account }}</div>
-          <button class="btn btn-ghost btn-sm btn-block mt-3 !justify-start" @click="((evm.pickerOpen = true), (menu = ''))"><ChevronDown :size="15" />Switch wallet</button>
-          <button class="btn btn-ghost btn-sm btn-block !justify-start" @click="(disconnectEvm(), (menu = ''))"><LogOut :size="15" />Disconnect</button>
-        </template>
+          <div v-if="walletNode.problem" class="pb-2 text-sm text-warn">{{ walletNode.problem }}</div>
+        </div>
       </div>
     </Transition>
 
@@ -131,8 +175,8 @@ const chainName = computed(() => (evm.chainId ? evmChain(evm.chainId).name : '')
 
     <Modal :open="evm.pickerOpen" title="Connect a wallet" @close="evm.pickerOpen = false">
       <div v-if="evm.wallets.length" class="grid gap-2">
-        <button v-for="w in evm.wallets" :key="w.info.uuid" data-testid="wallet-option" class="btn !justify-start !h-14 text-base" @click="pick(w)">
-          <img v-if="w.info.icon" :src="w.info.icon" width="28" height="28" alt="" class="rounded-md" />
+        <button v-for="w in evm.wallets" :key="w.info.uuid" data-testid="wallet-option" class="pick" @click="pick(w)">
+          <img v-if="w.info.icon" :src="w.info.icon" width="32" height="32" alt="" class="rounded-lg" />
           <Wallet v-else :size="22" />
           {{ w.info.name }}
         </button>
@@ -143,8 +187,51 @@ const chainName = computed(() => (evm.chainId ? evmChain(evm.chainId).name : '')
 </template>
 
 <style scoped>
-.wallet.connected {
+.connected {
   --btn-line: color-mix(in srgb, var(--znn) 35%, var(--line-strong));
+  padding: 0 12px 0 8px;
+}
+.stack {
+  display: inline-flex;
+}
+.stack > * + * {
+  margin-left: -6px;
+  box-shadow: 0 0 0 2px var(--raised);
+}
+.chev {
+  transition: transform 220ms var(--spring);
+}
+.chev.up {
+  transform: rotate(180deg);
+}
+/* On a phone the button is not at the screen's edge, so the menu is placed
+   against the screen instead of against the button. */
+.menu {
+  position: fixed;
+  top: 68px;
+  right: 16px;
+  left: 16px;
+}
+@media (min-width: 700px) {
+  .menu {
+    position: absolute;
+    top: calc(100% + 10px);
+    right: 0;
+    left: auto;
+    width: 340px;
+  }
+}
+.wallet-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 60px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+}
+.icon-btn.sm {
+  width: 36px;
+  height: 36px;
 }
 .node-switch {
   display: flex;
@@ -155,16 +242,34 @@ const chainName = computed(() => (evm.chainId ? evmChain(evm.chainId).name : '')
   font-size: 14px;
   color: var(--soft);
 }
-.node-switch:hover {
+.node-switch:hover:not(:disabled) {
   color: var(--fg);
 }
-.menu {
-  position: absolute;
-  right: 0;
-  top: calc(100% + 8px);
-  width: min(300px, calc(100vw - 32px));
-  padding: 14px;
-  z-index: 40;
-  box-shadow: var(--edge), var(--shadow-pop);
+.node-switch:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.pick {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 60px;
+  padding: 0 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  font-size: 16px;
+  font-weight: 500;
+  transition:
+    background 180ms var(--ease),
+    border-color 180ms var(--ease),
+    transform 220ms var(--spring);
+}
+.pick:hover {
+  background: var(--raised);
+  border-color: var(--line-strong);
+  transform: translateY(-1px);
+}
+.pick:active {
+  transform: scale(0.98);
 }
 </style>

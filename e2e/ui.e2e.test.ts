@@ -181,11 +181,14 @@ state: ${await page.evaluate(() => { const b = (window as any).__bridge; return 
     })
     expect(await text('header')).toContain('Devnet')
     // Syrius was "approved" for this origin, so the page reads it without a prompt.
-    await page.waitForFunction((a) => document.querySelector('[data-testid="wallet-zenon"]')?.textContent?.includes(a), { timeout: 20_000 }, zAdmin.address.slice(0, 5))
-    await click('[data-testid="wallet-evm"]')
+    await page.waitForFunction((a) => (window as any).__bridge.syrius.address === a, { timeout: 20_000 }, zAdmin.address)
+    // Both wallets live behind one button.
+    await click('[data-testid="wallet-menu"]')
+    expect(await text('[data-testid="wallet-zenon"]')).toContain(zAdmin.address.slice(0, 5))
+    await click('[data-testid="wallet-evm-connect"]')
     await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="wallet-option"]')].some((b) => b.textContent?.includes('Lab Wallet')))
     await click('[data-testid="wallet-option"]')
-    await page.waitForFunction((a) => document.querySelector('[data-testid="wallet-evm"]')?.textContent?.toLowerCase().includes(a), {}, evmUser.address.slice(0, 5).toLowerCase())
+    await page.waitForFunction((a) => (window as any).__bridge.evm.account?.toLowerCase() === a, {}, evmUser.address.toLowerCase())
     // The picker fades out; a click before it is gone lands on its backdrop.
     await page.waitForFunction(() => !document.querySelector('[role="dialog"]'))
   })
@@ -193,7 +196,8 @@ state: ${await page.evaluate(() => { const b = (window as any).__bridge; return 
   it('moves to the Syrius node only after its network is confirmed', async () => {
     const source = () => page.evaluate(() => (window as any).__bridge.node.source as string)
     expect(await source()).toBe('default')
-    await click('[data-testid="wallet-zenon"]')
+    await click('[data-testid="wallet-menu"]')
+    await click('[data-testid="node-toggle"]')
     await click('[data-testid="node-switch"]')
     await page.waitForFunction(() => document.querySelector('[data-testid="node-network"]')?.textContent?.trim() === 'Devnet')
     // Asked, not yet answered: still the default node.
@@ -202,7 +206,7 @@ state: ${await page.evaluate(() => { const b = (window as any).__bridge; return 
     await page.waitForFunction(() => (window as any).__bridge.node.source === 'wallet')
     expect(await page.evaluate(() => (window as any).__bridge.node.chainId as number)).toBe(322)
     await page.waitForFunction(() => !document.querySelector('[role="dialog"]'))
-    // The menu closed when the pointer left it for the dialog.
+    // The menu steps aside for the dialog.
     await page.waitForFunction(() => !document.querySelector('[data-testid="node-switch"]'))
   })
 
@@ -234,7 +238,7 @@ state: ${await page.evaluate(() => { const b = (window as any).__bridge; return 
   it('unwraps 1 wZNN back: approve, send, then redeem on Zenon', async () => {
     await page.goto(URL + '#/', { waitUntil: 'domcontentloaded' })
     await page.waitForFunction(() => document.body.innerText.includes('Anvil'), { timeout: 60_000 })
-    await page.waitForFunction(() => document.querySelector('[data-testid="wallet-evm"]')?.textContent?.includes('0x'), { timeout: 20_000 })
+    await page.waitForFunction(() => !!(window as any).__bridge.evm.account, { timeout: 20_000 })
     await click('[data-testid="bridge-flip"]')
     await page.type('input[aria-label="Amount"]', '1')
     await page.waitForFunction(() => document.querySelector('[data-testid="bridge-action"]')?.textContent?.includes('Approve'), { timeout: 30_000 })

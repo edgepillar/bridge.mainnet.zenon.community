@@ -6,7 +6,7 @@
 // approve, if the allowance is short, then `unwrap` on the EVM bridge; the
 // Zenon redeem happens later, from Activity.
 import { computed, ref, watch } from 'vue'
-import { ArrowDownUp, ChevronDown, Pencil, Clock, Fuel, Plus, Loader2, Zap } from 'lucide-vue-next'
+import { ArrowDownUp, ArrowRight, ChevronDown, Clock, Fuel, Gift, Plus, Loader2, SlidersHorizontal, Zap } from 'lucide-vue-next'
 import TokenIcon from '../components/TokenIcon.vue'
 import Amount from '../components/Amount.vue'
 import Modal from '../components/Modal.vue'
@@ -23,7 +23,7 @@ import { readClient, writeClient } from '../evm/client.ts'
 import { bridgeAbi, erc20Abi } from '../evm/abi.ts'
 import { wrapTokenBlock, affiliateActive } from '../znn/api.ts'
 import { isAddress } from '../znn/primitives.ts'
-import { parseUnits, unitsToInput, duration, formatUnits } from '../core/format.ts'
+import { parseUnits, unitsToInput, duration, formatUnits, shorten } from '../core/format.ts'
 import { wrapFee, wrapReceive, unwrapReceive, wrapEstimate, unwrapEstimate, LOW_PLASMA } from '../core/fees.ts'
 import { recipientString } from '../core/referral.ts'
 import { requestPlasma, canRequest } from '../core/plasmaBot.ts'
@@ -37,8 +37,9 @@ const routeKey = ref<string>('')
 const amountText = ref('')
 const recipientText = ref('')
 const editingRecipient = ref(false)
-const tokenPicker = ref(false)
-const networkPicker = ref(false)
+const picker = ref(false)
+const advanced = ref(false)
+const details = ref(false)
 const termsOpen = ref(false)
 const sending = ref(false)
 const approving = ref(false)
@@ -87,6 +88,9 @@ const evmNet = computed(() => (chainId.value ? bridge.evmNetworks[chainId.value]
 // What the user holds on the sending side, and the token's units there.
 const srcSymbol = computed(() => (dir.value === 'wrap' ? route.value?.zts?.symbol : route.value?.evm?.symbol) ?? '')
 const dstSymbol = computed(() => (dir.value === 'wrap' ? route.value?.evm?.symbol : route.value?.zts?.symbol) ?? '')
+// Every asset is shown with the chain it is on.
+const srcNet = computed(() => (dir.value === 'wrap' ? 'Zenon' : (net.value?.name ?? '')))
+const dstNet = computed(() => (dir.value === 'wrap' ? (net.value?.name ?? '') : 'Zenon'))
 const decimals = computed(() => (dir.value === 'wrap' ? route.value?.zts?.decimals : route.value?.evm?.decimals) ?? 8)
 
 const balance = ref<bigint | null>(null)
@@ -139,6 +143,10 @@ watch(defaultRecipient, (now) => {
     recipientText.value = ''
   }
 })
+function toggleCustomRecipient() {
+  editingRecipient.value = !editingRecipient.value
+  recipientText.value = editingRecipient.value ? defaultRecipient.value : ''
+}
 watch(dir, (_n, old) => {
   if (old === undefined) return
   editingRecipient.value = false
@@ -365,165 +373,158 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
 </script>
 
 <template>
-  <section class="rise mx-auto grid max-w-[480px] grid-cols-1 gap-4">
-    <div class="panel p-4 md:p-5">
-      <div class="mb-4 flex items-center justify-between">
-        <h1 class="text-xl font-semibold">Bridge</h1>
-        <span v-if="estimate" class="inline-flex items-center gap-1.5 text-sm text-dim"><Clock :size="14" />~{{ duration(estimate) }}</span>
-      </div>
+  <section class="rise mx-auto grid max-w-[440px] grid-cols-1 gap-2">
+    <div class="flex items-center justify-between px-1">
+      <span v-if="estimate" class="inline-flex items-center gap-1.5 text-sm text-dim"><Clock :size="14" />~{{ duration(estimate) }}</span>
+      <span v-else />
+      <button class="adv" data-testid="bridge-advanced" @click="advanced = true">
+        Advanced<SlidersHorizontal :size="15" />
+        <span v-if="editingRecipient || sendWhileDown" class="adv-dot" />
+      </button>
+    </div>
 
-      <!-- From -->
-      <div class="leg well p-3">
-        <div class="mb-2 flex items-center justify-between">
-          <span class="label">From</span>
-          <button v-if="dir === 'unwrap'" class="net-btn" @click="networkPicker = true">
-            <TokenIcon :network="net?.name ?? ''" :size="18" />{{ net?.name }}<ChevronDown :size="14" />
-          </button>
-          <span v-else class="net-btn static"><TokenIcon network="Zenon" :size="18" />Zenon</span>
-        </div>
-        <div class="flex items-center gap-3">
-          <input
-            v-model="amountText"
-            class="amount-input mono w-0 min-w-0 flex-1"
-            inputmode="decimal"
-            placeholder="0"
-            aria-label="Amount"
-            autocomplete="off"
-          />
-          <button class="token-btn" :disabled="!routes.length" @click="tokenPicker = true">
-            <TokenIcon :symbol="srcSymbol" :size="22" />
-            <span class="font-medium">{{ srcSymbol || 'Token' }}</span>
-            <ChevronDown :size="15" class="text-dim" />
-          </button>
-        </div>
-        <div class="mt-2 flex h-5 items-center justify-between text-sm text-dim">
-          <span>
-            Balance <Amount :value="balance ?? 0n" :decimals="decimals" />
-            <button class="max-btn" @click="setMax">Max</button>
-          </span>
-          <span v-if="min" class="text-xs">Min <Amount :value="min" :decimals="decimals" /></span>
-        </div>
+    <!-- From -->
+    <div class="leg">
+      <button class="asset" :disabled="!bridge.loaded" @click="picker = true">
+        <TokenIcon :symbol="srcSymbol" :chain="srcNet" :size="44" />
+        <span class="grid min-w-0 flex-1 text-left">
+          <span class="text-lg leading-tight font-semibold">{{ srcSymbol || 'From' }}</span>
+          <span class="text-sm text-dim">{{ srcNet }}</span>
+        </span>
+        <span class="chevron"><ChevronDown :size="16" /></span>
+      </button>
+      <div class="mt-4 flex items-center gap-3">
+        <input v-model="amountText" class="amount-input mono w-0 min-w-0 flex-1" inputmode="decimal" placeholder="0.00" aria-label="Amount" autocomplete="off" />
+        <button class="max-btn" @click="setMax">Max</button>
       </div>
-
-      <div class="relative z-10 -my-3 flex justify-center">
-        <button data-testid="bridge-flip" class="flip" :class="{ flipped: dir === 'unwrap' }" aria-label="Reverse direction" @click="flip"><ArrowDownUp :size="18" /></button>
+      <div class="mt-1 flex h-5 items-center justify-between text-sm text-dim">
+        <span>Balance <Amount :value="balance ?? 0n" :decimals="decimals" /></span>
+        <span v-if="min" class="text-xs">Min <Amount :value="min" :decimals="decimals" /></span>
       </div>
+    </div>
 
-      <!-- To -->
-      <div class="leg well p-3">
-        <div class="mb-2 flex items-center justify-between">
-          <span class="label">To</span>
-          <button v-if="dir === 'wrap'" class="net-btn" @click="networkPicker = true">
-            <TokenIcon :network="net?.name ?? ''" :size="18" />{{ net?.name }}<ChevronDown :size="14" />
-          </button>
-          <span v-else class="net-btn static"><TokenIcon network="Zenon" :size="18" />Zenon</span>
-        </div>
-        <div class="flex items-center gap-3">
-          <div data-testid="bridge-receive" class="mono min-w-0 flex-1 truncate text-2xl" :class="receive ? 'text-fg' : 'text-dim'">
-            {{ receive ? formatUnits(receive, decimals) : '0' }}
-          </div>
-          <span class="token-btn static"><TokenIcon :symbol="dstSymbol" :size="22" /><span class="font-medium">{{ dstSymbol }}</span></span>
-        </div>
-        <div class="mt-3 flex min-h-[28px] items-center gap-2 text-sm">
-          <span class="text-dim">Recipient</span>
-          <template v-if="!editingRecipient">
-            <span v-if="recipient" class="mono truncate text-soft">{{ recipient }}</span>
-            <span v-else class="text-dim">connect or enter</span>
-            <button class="ml-auto inline-flex h-7 w-7 shrink-0 place-items-center justify-center rounded text-dim hover:bg-raised hover:text-fg" aria-label="Edit recipient" @click="((editingRecipient = true), (recipientText = recipient))">
-              <Pencil :size="13" />
-            </button>
-          </template>
-          <input
-            v-else
-            v-model="recipientText"
-            class="field mono !min-h-[36px] flex-1 text-sm"
-            :placeholder="dir === 'wrap' ? '0x…' : 'z1…'"
-            aria-label="Recipient"
-            autocomplete="off"
-            spellcheck="false"
-          />
-        </div>
+    <div class="relative z-10 -my-5 flex justify-center">
+      <button data-testid="bridge-flip" class="flip" :class="{ flipped: dir === 'unwrap' }" aria-label="Reverse direction" @click="flip"><ArrowDownUp :size="17" /></button>
+    </div>
+
+    <!-- To -->
+    <div class="leg">
+      <button class="asset" :disabled="!bridge.loaded" @click="picker = true">
+        <TokenIcon :symbol="dstSymbol" :chain="dstNet" :size="44" />
+        <span class="grid min-w-0 flex-1 text-left">
+          <span class="text-lg leading-tight font-semibold">{{ dstSymbol || 'To' }}</span>
+          <span class="text-sm text-dim">{{ dstNet }}</span>
+        </span>
+        <span class="chevron"><ChevronDown :size="16" /></span>
+      </button>
+      <div data-testid="bridge-receive" class="mono mt-4 truncate text-[30px] leading-[1.25]" :class="receive ? 'text-fg' : 'text-dim'">
+        {{ receive ? formatUnits(receive, decimals) : '0.00' }}
       </div>
-
-      <!-- Notes that matter for this transfer -->
-      <div class="mt-3 grid gap-2 text-sm">
-        <div v-if="dir === 'wrap' && syrius.address && plasma === 0" class="note warn">
-          <Fuel :size="15" /><span class="flex-1">No plasma. Syrius will compute proof of work, which is slow.</span>
-          <button v-if="plasmaBot.url || plasmaBot.page" class="btn btn-sm" :disabled="plasmaBusy" @click="getPlasma(syrius.address!)">
-            <Loader2 v-if="plasmaBusy" :size="14" class="spin" /><Zap v-else :size="14" />Get plasma
-          </button>
-        </div>
-        <div v-else-if="dir === 'wrap' && plasma !== null && plasma > 0 && plasma < LOW_PLASMA" class="note">
-          <Fuel :size="15" /><span>Low plasma. Fuse QSR for faster sends.</span>
-        </div>
-        <div v-if="dir === 'unwrap' && recipientValid && recipientPlasma === 0" class="note warn">
-          <Fuel :size="15" /><span class="flex-1">Recipient has no plasma, needed to redeem on Zenon.</span>
-          <button v-if="plasmaBot.url || plasmaBot.page" class="btn btn-sm" :disabled="plasmaBusy" @click="getPlasma(recipient)">
-            <Loader2 v-if="plasmaBusy" :size="14" class="spin" /><Zap v-else :size="14" />{{ canRequest(plasmaBot) ? 'Get plasma' : 'Plasma bot' }}
-          </button>
-        </div>
-        <div v-if="bonus" class="note new">Referral bonus: +1% on arrival.</div>
+      <div class="mt-1 flex h-5 items-center gap-1.5 text-sm text-dim">
+        <template v-if="recipient">
+          <span>To</span><span class="mono truncate" :class="recipientValid ? 'text-soft' : 'text-danger'" :title="recipient">{{ shorten(recipient, 8, 6) }}</span>
+          <span v-if="editingRecipient" class="chip chip-dim !h-5">Custom</span>
+        </template>
+        <span v-else>Connect a wallet to receive</span>
       </div>
+    </div>
 
-      <dl v-if="route && amount" class="summary mt-3">
+    <!-- Notes that matter for this transfer -->
+    <div v-if="dir === 'wrap' && syrius.address && plasma === 0" class="note warn">
+      <Fuel :size="15" /><span class="flex-1">No plasma. Syrius will compute proof of work, which is slow.</span>
+      <button v-if="plasmaBot.url || plasmaBot.page" class="btn btn-sm" :disabled="plasmaBusy" @click="getPlasma(syrius.address!)">
+        <Loader2 v-if="plasmaBusy" :size="14" class="spin" /><Zap v-else :size="14" />Get plasma
+      </button>
+    </div>
+    <div v-if="dir === 'unwrap' && recipientValid && recipientPlasma === 0" class="note warn">
+      <Fuel :size="15" /><span class="flex-1">Recipient has no plasma, needed to redeem on Zenon.</span>
+      <button v-if="plasmaBot.url || plasmaBot.page" class="btn btn-sm" :disabled="plasmaBusy" @click="getPlasma(recipient)">
+        <Loader2 v-if="plasmaBusy" :size="14" class="spin" /><Zap v-else :size="14" />{{ canRequest(plasmaBot) ? 'Get plasma' : 'Plasma bot' }}
+      </button>
+    </div>
+    <div v-if="bonus" class="note new"><Gift :size="15" />Referral bonus: +1% on arrival.</div>
+
+    <button data-testid="bridge-action" class="btn btn-plasma btn-block mt-2 !min-h-[58px] text-[17px]" :disabled="!actionable || busy" @click="onAction">
+      <Loader2 v-if="busy" :size="18" class="spin" />
+      <span v-if="syrius.hold">Syrius is busy, retrying in {{ syrius.hold }}s</span>
+      <span v-else>{{ actionLabel }}</span>
+    </button>
+
+    <!-- The cost and the steps, one tap away. -->
+    <div v-if="route" class="mt-1 px-1">
+      <button class="details-row" :aria-expanded="details" @click="details = !details">
+        <span>{{ dir === 'wrap' ? `Fee ${route.pair.feePercentage / 100}%` : 'No bridge fee' }}</span>
+        <span class="flex-1" />
+        <span>Details</span><ChevronDown :size="14" class="chev" :class="{ up: details }" />
+      </button>
+      <dl v-if="details" class="summary slide-down">
         <div v-if="dir === 'wrap'">
-          <dt>Fee {{ route.pair.feePercentage / 100 }}%</dt>
+          <dt>Fee</dt>
           <dd><Amount :value="fee" :decimals="decimals" :symbol="srcSymbol" /></dd>
+        </div>
+        <div v-if="estimate">
+          <dt>Time</dt>
+          <dd>~{{ duration(estimate) }}</dd>
         </div>
         <div>
           <dt>Steps</dt>
           <dd>{{ dir === 'wrap' ? `Send on Zenon, then redeem twice on ${route.networkName}` : (needsApproval ? 'Approve, send, then redeem on Zenon' : 'Send, then redeem on Zenon') }}</dd>
         </div>
+        <div v-if="dir === 'wrap' && plasma !== null && plasma > 0 && plasma < LOW_PLASMA">
+          <dt>Plasma</dt>
+          <dd>Low. Fuse QSR for faster sends.</dd>
+        </div>
       </dl>
-
-      <label v-if="bridgeDown()" class="mt-3 flex min-h-[44px] cursor-pointer items-center gap-2 text-sm text-soft">
-        <input v-model="sendWhileDown" type="checkbox" class="h-4 w-4 accent-[var(--warn)]" />
-        Send anyway. It waits until the bridge is back.
-      </label>
-
-      <button data-testid="bridge-action" class="btn btn-plasma btn-block mt-4 !min-h-[52px] text-base" :disabled="!actionable || busy" @click="onAction">
-        <Loader2 v-if="busy" :size="18" class="spin" />
-        <span v-if="syrius.hold">Syrius is busy, retrying in {{ syrius.hold }}s</span>
-        <span v-else>{{ actionLabel }}</span>
-      </button>
-
-      <div v-if="dir === 'wrap' && route?.evm && evm.selected" class="mt-2 text-center">
-        <button class="btn btn-ghost btn-sm" @click="addToken"><Plus :size="14" />Add {{ route.evm.symbol }} to wallet</button>
-      </div>
     </div>
 
-    <Modal :open="tokenPicker" title="Token" @close="tokenPicker = false">
+    <!-- Asset: the network and the token, in one place. -->
+    <Modal :open="picker" title="Select asset" @close="picker = false">
+      <div v-if="chains.length > 1" class="mb-3 flex flex-wrap gap-2">
+        <button v-for="id in chains" :key="id" class="net-pill" :class="{ active: id === chainId }" @click="chainId = id">
+          <TokenIcon :network="evmChain(id).name" :size="20" />{{ evmChain(id).name }}
+        </button>
+      </div>
       <div class="grid gap-1">
-        <button
-          v-for="r in routes"
-          :key="r.key"
-          class="pick-row"
-          :class="{ active: r.key === routeKey }"
-          @click="((routeKey = r.key), (tokenPicker = false))"
-        >
-          <TokenIcon :symbol="dir === 'wrap' ? r.zts?.symbol : r.evm?.symbol" :size="28" />
+        <button v-for="r in routes" :key="r.key" class="pick-row" :class="{ active: r.key === routeKey }" @click="((routeKey = r.key), (picker = false))">
+          <TokenIcon :symbol="dir === 'wrap' ? r.zts?.symbol : r.evm?.symbol" :chain="dir === 'wrap' ? 'Zenon' : r.networkName" :size="36" />
           <span class="grid text-left">
             <span class="font-medium">{{ dir === 'wrap' ? r.zts?.symbol : r.evm?.symbol }}</span>
-            <span class="text-xs text-dim">to {{ dir === 'wrap' ? r.evm?.symbol : r.zts?.symbol }} · {{ dir === 'wrap' ? r.zts?.name : r.evm?.name }}</span>
+            <span class="text-xs text-dim">{{ dir === 'wrap' ? 'Zenon' : r.networkName }}</span>
           </span>
-          <span v-if="dir === 'wrap' && r.pair.feePercentage" class="ml-auto text-xs text-dim">{{ r.pair.feePercentage / 100 }}% fee</span>
+          <ArrowRight :size="14" class="mx-1 text-dim" />
+          <TokenIcon :symbol="dir === 'wrap' ? r.evm?.symbol : r.zts?.symbol" :chain="dir === 'wrap' ? r.networkName : 'Zenon'" :size="36" />
+          <span class="grid text-left">
+            <span class="font-medium">{{ dir === 'wrap' ? r.evm?.symbol : r.zts?.symbol }}</span>
+            <span class="text-xs text-dim">{{ dir === 'wrap' ? r.networkName : 'Zenon' }}</span>
+          </span>
+          <span v-if="dir === 'wrap' && r.pair.feePercentage" class="ml-auto text-xs text-dim">{{ r.pair.feePercentage / 100 }}%</span>
         </button>
         <p v-if="!routes.length" class="text-soft">None yet</p>
       </div>
     </Modal>
 
-    <Modal :open="networkPicker" title="Network" @close="networkPicker = false">
-      <div class="grid gap-1">
-        <button
-          v-for="id in chains"
-          :key="id"
-          class="pick-row"
-          :class="{ active: id === chainId }"
-          @click="((chainId = id), (networkPicker = false))"
-        >
-          <TokenIcon :network="evmChain(id).name" :size="28" />
-          <span class="font-medium">{{ evmChain(id).name }}</span>
-          <span class="mono ml-auto text-xs text-dim">{{ id }}</span>
+    <Modal :open="advanced" title="Advanced" @close="advanced = false">
+      <div class="grid grid-cols-1 gap-1">
+        <button class="menu-row !px-0" data-testid="custom-recipient" @click="toggleCustomRecipient">
+          <span class="flex-1 text-left">Custom recipient</span>
+          <span class="switch" role="switch" :aria-checked="editingRecipient" />
+        </button>
+        <input
+          v-if="editingRecipient"
+          v-model="recipientText"
+          class="field mono slide-down mb-2 text-sm"
+          :placeholder="dir === 'wrap' ? '0x…' : 'z1…'"
+          aria-label="Recipient"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <div v-if="editingRecipient && recipientText && !recipientValid" class="mb-2 text-sm text-danger">Not {{ dir === 'wrap' ? 'an EVM' : 'a Zenon' }} address</div>
+        <button v-if="bridgeDown()" class="menu-row !px-0" @click="sendWhileDown = !sendWhileDown">
+          <span class="flex-1 text-left">Send while the bridge is down</span>
+          <span class="switch" role="switch" :aria-checked="sendWhileDown" />
+        </button>
+        <button v-if="route?.evm && evm.selected" class="menu-row !px-0" @click="addToken">
+          <span class="flex-1 text-left">Add {{ route.evm.symbol }} to wallet</span><Plus :size="16" />
         </button>
       </div>
     </Modal>
@@ -533,93 +534,145 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
 </template>
 
 <style scoped>
+.adv {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 4px;
+  font-size: 13px;
+  color: var(--dim);
+  transition: color 180ms var(--ease);
+}
+.adv:hover {
+  color: var(--fg);
+}
+.adv svg {
+  transition: transform 320ms var(--spring);
+}
+.adv:hover svg {
+  transform: rotate(90deg);
+}
+.adv-dot {
+  position: absolute;
+  top: 10px;
+  right: -2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warn);
+}
 .leg {
-  transition: border-color 150ms var(--ease);
+  padding: 18px 20px 16px;
+  border-radius: var(--radius-card);
+  background: var(--card-glass);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--line);
+  box-shadow: var(--edge), var(--shadow-panel);
+  --icon-ring: var(--surface);
+  transition:
+    border-color 180ms var(--ease),
+    box-shadow 180ms var(--ease);
 }
 .leg:focus-within {
   border-color: var(--line-strong);
+}
+.asset {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-height: 48px;
+}
+.chevron {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid var(--line-strong);
+  color: var(--soft);
+  transition:
+    background 180ms var(--ease),
+    color 180ms var(--ease),
+    transform 260ms var(--spring);
+}
+.asset:hover:not(:disabled) .chevron {
+  background: var(--raised);
+  color: var(--fg);
+  transform: translateY(2px);
+}
+.asset:active:not(:disabled) .chevron {
+  transform: scale(0.92);
 }
 .amount-input {
   background: transparent;
   border: 0;
   outline: none;
-  font-size: 28px;
-  line-height: 1.2;
+  font-size: 30px;
+  line-height: 1.25;
   color: var(--fg);
-  padding: 4px 0;
+  padding: 0;
 }
 .amount-input::placeholder {
   color: var(--dim);
 }
-.token-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 44px;
-  padding: 0 10px 0 8px;
-  border-radius: 999px;
-  background: var(--raised);
-  border: 1px solid var(--line);
-  transition: border-color 150ms var(--ease);
-}
-.token-btn:not(.static):hover {
-  border-color: var(--line-strong);
-}
-.token-btn.static {
-  padding-right: 14px;
-}
-.net-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 32px;
-  padding: 0 8px;
-  margin: -6px -8px;
-  border-radius: var(--radius);
-  font-size: 14px;
-  color: var(--soft);
-  transition: background 150ms var(--ease);
-}
-.net-btn:not(.static):hover {
-  background: var(--raised);
-  color: var(--fg);
-}
 .max-btn {
-  margin-left: 6px;
-  padding: 1px 6px;
-  border-radius: 4px;
-  font-size: 12px;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  font-size: 13px;
   font-weight: 600;
-  color: var(--znn-ink);
-  background: var(--ok-bg);
+  color: var(--fg);
+  transition:
+    background 180ms var(--ease),
+    border-color 180ms var(--ease),
+    transform 220ms var(--spring);
+}
+.max-btn:hover {
+  background: var(--raised);
+  border-color: var(--dim);
+  transform: translateY(-1px);
+}
+.max-btn:active {
+  transform: scale(0.94);
 }
 .flip {
   display: grid;
   place-items: center;
-  width: 44px;
-  height: 44px;
-  border-radius: 12px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
   background: var(--surface);
   border: 1px solid var(--line-strong);
   color: var(--soft);
+  box-shadow: 0 0 0 4px var(--bg);
   transition:
-    transform 320ms var(--spring),
-    color 150ms var(--ease),
-    border-color 150ms var(--ease);
+    transform 420ms var(--spring),
+    color 180ms var(--ease),
+    border-color 180ms var(--ease);
 }
 .flip:hover {
-  color: var(--fg);
-  border-color: var(--dim);
+  color: var(--znn-ink);
+  border-color: var(--znn-ink);
+  transform: rotate(180deg);
 }
 .flip.flipped {
   transform: rotate(180deg);
+}
+.flip.flipped:hover {
+  transform: rotate(360deg);
 }
 .note {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
-  border-radius: var(--radius);
+  padding: 10px 14px;
+  border-radius: 16px;
+  font-size: 14px;
   color: var(--soft);
   background: var(--sunk);
 }
@@ -631,9 +684,29 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
   color: var(--new-ink);
   background: var(--new-bg);
 }
+.details-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 44px;
+  font-size: 13px;
+  color: var(--dim);
+  transition: color 180ms var(--ease);
+}
+.details-row:hover {
+  color: var(--fg);
+}
+.chev {
+  transition: transform 220ms var(--spring);
+}
+.chev.up {
+  transform: rotate(180deg);
+}
 .summary {
   display: grid;
-  gap: 6px;
+  gap: 8px;
+  padding-bottom: 8px;
   font-size: 14px;
 }
 .summary > div {
@@ -648,17 +721,45 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
   text-align: right;
   color: var(--soft);
 }
+.net-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 14px 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: 14px;
+  color: var(--soft);
+  transition:
+    background 180ms var(--ease),
+    color 180ms var(--ease),
+    border-color 180ms var(--ease);
+}
+.net-pill:hover,
+.net-pill.active {
+  color: var(--fg);
+  background: var(--raised);
+  border-color: var(--line-strong);
+}
 .pick-row {
   display: flex;
   align-items: center;
   gap: 12px;
-  min-height: 56px;
+  min-height: 64px;
   padding: 0 12px;
   border-radius: var(--radius);
-  transition: background 150ms var(--ease);
+  --icon-ring: var(--surface);
+  transition:
+    background 180ms var(--ease),
+    transform 220ms var(--spring);
 }
 .pick-row:hover,
 .pick-row.active {
   background: var(--raised);
+  --icon-ring: var(--raised);
+}
+.pick-row:active {
+  transform: scale(0.985);
 }
 </style>
