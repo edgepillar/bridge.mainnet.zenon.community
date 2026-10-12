@@ -10,6 +10,8 @@ export default defineConfig({
   build: {
     target: 'es2022',
     sourcemap: false,
+    // Keep small local fonts as files so production respects font-src 'self'.
+    assetsInlineLimit: 0,
   },
   server: { port: 5190 },
   test: {

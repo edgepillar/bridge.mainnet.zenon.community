@@ -78,6 +78,7 @@ jobs:
           name: qualification-evidence
           path: |
             .browser-results/report.json
+            .browser-results/built-report.json
             .browser-results/*.png
             e2e/lab/.build/manifest.json
             e2e/lab/.build/native/run-manifest.json

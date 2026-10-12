@@ -28,8 +28,7 @@ What the original app did, flow by flow, is in
 ## Wallets
 
 - **Zenon:** the Syrius browser extension (`window.zenon`, v0.3.4 and later;
-  the older postMessage protocol too). The page reads from
-  `my.hc1node.com:35998` by default. "Use Syrius node" in the Syrius menu
+  the older postMessage protocol too; real versions require [integration qualification](docs/SUPPORT.md)). The page tries its configured primary and fallback nodes. "Use Syrius node" in the wallet menu
   switches to the wallet's node after the user confirms its network (Mainnet,
   Testnet or a devnet, from the node's chain identifier). Bridge details are read from the selected node, but new transfers require a verified matching EVM route and fresh safety data. A node switch does not establish support for an arbitrary network.
 - **EVM:** any wallet that announces itself by EIP-6963 (MetaMask, Rabby,
@@ -69,7 +68,9 @@ docs/         FUNCTIONALITY, ARCHITECTURE, TESTING, DEPLOY
 - [docs/FUNCTIONALITY.md](docs/FUNCTIONALITY.md): what the original did
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): how this one is built, and why
 - [docs/TESTING.md](docs/TESTING.md): unit tests and the end-to-end devnet
-- [docs/DEPLOY.md](docs/DEPLOY.md): GitHub Pages, settings, the plasma bot token
+- [docs/DEPLOY.md](docs/DEPLOY.md): GitHub Pages, acceptance and the tokenless plasma proxy
+- [docs/RECOVERY.md](docs/RECOVERY.md): original transaction evidence and unknown outcomes
+- [docs/SUPPORT.md](docs/SUPPORT.md): supported capabilities and integration acceptance limits
 
 ## Dropped from the original
 
