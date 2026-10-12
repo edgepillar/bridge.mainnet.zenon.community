@@ -6,7 +6,6 @@
 # repository variable VITE_BASE to /<repo>/.
 #
 # Optional repository secrets and variables (docs/DEPLOY.md):
-#   secret   VITE_PLASMA_BOT_TOKEN  zenonhub plasma bot token; public once built
 #   variable VITE_PLASMA_BOT_URL    a proxy that holds the token instead
 #   variable VITE_ZNN_NODE          comma-separated wss nodes, first that answers
 #   variable VITE_EVM_RPCS          JSON {chainId: url} for reads with no wallet
@@ -21,8 +20,6 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
@@ -32,18 +29,21 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          node-version: 22
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 26.5.0
           cache: npm
       - run: npm ci
-      - run: npm test
+      - run: npm run lint
+      - run: npm run test:coverage
+      - run: npm audit --audit-level=low
       - run: npm run build
         env:
           VITE_NETWORK: mainnet
           VITE_BASE: ${{ vars.VITE_BASE || '/' }}
-          VITE_PLASMA_BOT_TOKEN: ${{ secrets.VITE_PLASMA_BOT_TOKEN }}
           VITE_PLASMA_BOT_URL: ${{ vars.VITE_PLASMA_BOT_URL }}
           VITE_ZNN_NODE: ${{ vars.VITE_ZNN_NODE }}
           VITE_EVM_RPCS: ${{ vars.VITE_EVM_RPCS }}
@@ -52,7 +52,7 @@ jobs:
           if grep -rlE "https?://(cdn\.|unpkg\.com|fonts\.googleapis|fonts\.gstatic|cdnjs\.|cdn\.jsdelivr)" dist/; then
             echo "dist/ references a CDN"; exit 1
           fi
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         if: github.event_name != 'pull_request'
         with:
           path: dist
@@ -61,9 +61,13 @@ jobs:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4

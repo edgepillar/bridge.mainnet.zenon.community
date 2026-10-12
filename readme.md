@@ -23,7 +23,7 @@ more). As of 2026-10-12 mainnet is in that last state, with requests waiting
 34 days.
 
 What the original app did, flow by flow, is in
-[docs/FUNCTIONALITY.md](docs/FUNCTIONALITY.md). This rebuild keeps every flow.
+[docs/FUNCTIONALITY.md](docs/FUNCTIONALITY.md). Current safety and qualification boundaries are in [docs/QUALIFICATION.md](docs/QUALIFICATION.md); original-operation recovery is in [docs/RECOVERY.md](docs/RECOVERY.md).
 
 ## Wallets
 
@@ -31,8 +31,7 @@ What the original app did, flow by flow, is in
   the older postMessage protocol too). The page reads from
   `my.hc1node.com:35998` by default. "Use Syrius node" in the Syrius menu
   switches to the wallet's node after the user confirms its network (Mainnet,
-  Testnet or a devnet, from the node's chain identifier). Any chain with a
-  bridge works: its details are read from the bridge contract.
+  Testnet or a devnet, from the node's chain identifier). Bridge details are read from the selected node, but new transfers require a verified matching EVM route and fresh safety data. A node switch does not establish support for an arbitrary network.
 - **EVM:** any wallet that announces itself by EIP-6963 (MetaMask, Rabby,
   Phantom, Coinbase and others), or `window.ethereum`. Reads go through the
   wallet's own RPC when it is on the right chain.
@@ -42,7 +41,7 @@ WalletConnect is not supported: it needs a project id and a remote relay.
 ## Run it
 
 ```sh
-npm install
+npm ci
 npm run dev          # http://localhost:5190, mainnet
 npm test             # unit tests
 npm run build        # dist/, what Pages serves
@@ -76,3 +75,5 @@ docs/         FUNCTIONALITY, ARCHITECTURE, TESTING, DEPLOY
 
 Google Tag Manager and the Twitter pixel (remote scripts), WalletConnect, and
 the unused "Supernova" network settings.
+
+Local checks and a one-key lab do not qualify production signing or real-wallet distributions. Review [deployment gates](docs/DEPLOY.md) and [source provenance](docs/PROVENANCE.md) before activation.

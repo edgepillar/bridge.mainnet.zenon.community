@@ -98,7 +98,7 @@ const click = async (sel: string) => {
 }
 // The list also holds requests from earlier runs, so a row is addressed by the
 // request it shows: `w:<id>` for a wrap, `u:<evm tx>` for an unwrap.
-const row = (key: string) => `[data-testid="activity-row"][data-key="${key}"]`
+const row = (key: string) => `[data-testid="activity-row"][data-kind="${key.startsWith('w:') ? 'wrap' : 'unwrap'}"][data-source-tx="${key.slice(2)}"]`
 /** Waits for that row to reach one of `states`; returns the one it is in. */
 async function rowState(keyPrefix: string, states: string[], timeout = 240_000): Promise<string> {
   const el = await page.waitForSelector(states.map((s) => `${row(keyPrefix)}[data-state="${s}"]`).join(','), { timeout }).catch(async (err) => {
@@ -137,7 +137,7 @@ beforeAll(async () => {
   browser = await puppeteer.launch({ executablePath: chromePath(), headless: true, protocolTimeout: 600_000 })
   page = await browser.newPage()
   await page.setViewport({ width: 1280, height: 900 })
-  page.on('pageerror', (e) => errors.push(e.message))
+  page.on('pageerror', (e) => errors.push(e instanceof Error ? e.message : String(e)))
   page.on('console', (m) => m.type() === 'error' && errors.push(m.text()))
 
   // Syrius, after approval: fill in the template, sign, publish.
@@ -157,6 +157,10 @@ beforeAll(async () => {
   // The EVM wallet: anvil signs for its own accounts.
   await page.exposeFunction('__labEvmRequest', async (json: string) => {
     const { method, params } = JSON.parse(json)
+    if (['eth_sendTransaction', 'eth_sendRawTransaction'].includes(method)) {
+      const { assertLab } = await import('./lib/lab.ts')
+      await assertLab()
+    }
     const res = await fetch(EVM_RPC, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) })
     return JSON.stringify(await res.json())
   })

@@ -5,13 +5,13 @@
 // redeem happens later, from Activity. Unwrap (EVM to Zenon) is an ERC-20
 // approve, if the allowance is short, then `unwrap` on the EVM bridge; the
 // Zenon redeem happens later, from Activity.
-import { computed, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { ArrowDownUp, ArrowRight, ChevronDown, Clock, Fuel, Gift, Plus, Loader2, SlidersHorizontal, Zap } from 'lucide-vue-next'
 import TokenIcon from '../components/TokenIcon.vue'
 import Amount from '../components/Amount.vue'
 import Modal from '../components/Modal.vue'
 import Terms from '../components/Terms.vue'
-import { bridge, bridgeDown, type Route } from '../state/bridge.ts'
+import { bridge, transferBlocker, nodeContext, type Route } from '../state/bridge.ts'
 import { api, node, syrius, sendBlock, connectSyrius, wrongZenonChain, onBuildChain } from '../state/zenon.ts'
 import { evm, ensureChain, walletForReads } from '../state/evm.ts'
 import { referrer } from '../state/referral.ts'
@@ -22,16 +22,21 @@ import { toast, toastError } from '../state/toasts.ts'
 import { readClient, writeClient } from '../evm/client.ts'
 import { bridgeAbi, erc20Abi } from '../evm/abi.ts'
 import { wrapTokenBlock, affiliateActive } from '../znn/api.ts'
-import { isAddress } from '../znn/primitives.ts'
+import { isUserAddress } from '../znn/primitives.ts'
+import { isEvmRecipient } from '../core/recipient.ts'
+import { operations, unresolvedOperation } from '../state/operations.ts'
+import { submitTransaction, successfulReceipt, transactionPayload } from '../evm/transactions.ts'
 import { parseUnits, unitsToInput, duration, formatUnits, shorten } from '../core/format.ts'
 import { wrapFee, wrapReceive, unwrapReceive, wrapEstimate, unwrapEstimate, LOW_PLASMA } from '../core/fees.ts'
-import { recipientString } from '../core/referral.ts'
+import { usableReferrer, recipientString } from '../core/referral.ts'
 import { requestPlasma, canRequest } from '../core/plasmaBot.ts'
 import { watchAsset } from '../wallet/eip6963.ts'
 import { config, evmChain, evmTxUrl } from '../config.ts'
 
 type Dir = 'wrap' | 'unwrap'
 const dir = ref<Dir>('wrap')
+let mounted = true
+onUnmounted(() => { mounted = false; balanceRequest++; recipientRequest++ })
 const chainId = ref<number | null>(null)
 const routeKey = ref<string>('')
 const amountText = ref('')
@@ -43,7 +48,6 @@ const details = ref(false)
 const termsOpen = ref(false)
 const sending = ref(false)
 const approving = ref(false)
-const sendWhileDown = ref(false)
 
 // Opened from another view on a given route.
 const prefill = bridgePrefill.value
@@ -98,42 +102,39 @@ const allowance = ref<bigint | null>(null)
 const plasma = ref<number | null>(null)
 const recipientPlasma = ref<number | null>(null)
 
+let balanceRequest = 0
+const balanceContext = () => JSON.stringify([nodeContext(), route.value?.key, dir.value, syrius.address, evm.account, evm.chainId, evm.selected?.info.uuid])
 async function refreshBalances() {
-  const r = route.value
-  if (!r) return
+  const request = ++balanceRequest, key = balanceContext(), r = route.value, a = api.value
+  const current = () => request === balanceRequest && key === balanceContext() && a === api.value
+  balance.value = null; allowance.value = null; plasma.value = null
+  if (!r || !a) return
   try {
     if (dir.value === 'wrap') {
-      allowance.value = null
-      if (!syrius.address) return void (balance.value = null)
-      const [b, p] = await Promise.all([api.value.balances(syrius.address), api.value.plasma(syrius.address)])
-      balance.value = b[r.pair.tokenStandard] ?? 0n
-      plasma.value = p.currentPlasma
+      const account = syrius.address
+      if (!account) return
+      const [b, p] = await Promise.all([a.balances(account), a.plasma(account)])
+      if (current()) { balance.value = b[r.pair.tokenStandard] ?? 0n; plasma.value = p.currentPlasma }
     } else {
-      if (!evm.account) return void ((balance.value = null), (allowance.value = null))
-      const c = readClient(r.chainId, walletForReads())
-      const token = r.pair.tokenAddress as `0x${string}`
-      const [b, a] = await Promise.all([
-        c.readContract({ address: token, abi: erc20Abi, functionName: 'balanceOf', args: [evm.account] }),
-        c.readContract({ address: token, abi: erc20Abi, functionName: 'allowance', args: [evm.account, r.contract] }),
+      const account = evm.account
+      if (!account || evm.chainId !== r.chainId) return
+      const c = readClient(r.chainId, walletForReads()), token = r.pair.tokenAddress as `0x${string}`
+      const [b, allowed] = await Promise.all([
+        c.readContract({ address: token, abi: erc20Abi, functionName: 'balanceOf', args: [account] }),
+        c.readContract({ address: token, abi: erc20Abi, functionName: 'allowance', args: [account, r.contract] }),
       ])
-      balance.value = b
-      allowance.value = a
+      if (current()) { balance.value = b; allowance.value = allowed }
     }
-  } catch {
-    /* keep the last value */
-  }
+  } catch { /* unknown balances never authorize a send */ }
 }
-watch([route, dir, () => syrius.address, () => evm.account, () => evm.chainId], refreshBalances, { immediate: true })
-watch(
-  () => node.tick,
-  (t) => t % 3 === 0 && refreshBalances(),
-)
+watch([route, dir, () => api.value, () => node.epoch, () => syrius.address, () => evm.account, () => evm.chainId, () => evm.selected], refreshBalances, { immediate: true, flush: 'sync' })
+watch(() => node.tick, (t) => t % 3 === 0 && refreshBalances())
 
 // Recipient: the connected wallet on the receiving side, unless edited.
 const defaultRecipient = computed(() => (dir.value === 'wrap' ? (evm.account ?? '') : (syrius.address ?? '')))
 const recipient = computed(() => (editingRecipient.value ? recipientText.value.trim() : defaultRecipient.value))
 const recipientValid = computed(() =>
-  dir.value === 'wrap' ? /^0x[0-9a-fA-F]{40}$/.test(recipient.value) : isAddress(recipient.value),
+  dir.value === 'wrap' ? isEvmRecipient(recipient.value) : isUserAddress(recipient.value),
 )
 // A wallet connected while the box is open and nothing valid is typed fills
 // it: the box was opened only because there was no wallet to take it from.
@@ -144,6 +145,7 @@ watch(defaultRecipient, (now) => {
   }
 })
 function toggleCustomRecipient() {
+  if (busy.value) return
   editingRecipient.value = !editingRecipient.value
   recipientText.value = editingRecipient.value ? defaultRecipient.value : ''
 }
@@ -154,16 +156,19 @@ watch(dir, (_n, old) => {
   amountText.value = ''
 })
 
+let recipientRequest = 0
 async function checkRecipientPlasma() {
+  const request = ++recipientRequest, key = nodeContext(), address = recipient.value, a = api.value
   recipientPlasma.value = null
   if (dir.value !== 'unwrap' || !recipientValid.value) return
   try {
-    recipientPlasma.value = (await api.value.plasma(recipient.value)).currentPlasma
+    const result = await a.plasma(address)
+    if (request === recipientRequest && nodeContext() === key && recipient.value === address && api.value === a) recipientPlasma.value = result.currentPlasma
   } catch {
     /* unknown */
   }
 }
-watch([recipient, dir], checkRecipientPlasma, { immediate: true })
+watch([recipient, dir, () => api.value, () => node.epoch], checkRecipientPlasma, { immediate: true })
 
 const amount = computed(() => parseUnits(amountText.value, decimals.value))
 const min = computed(() => {
@@ -173,7 +178,7 @@ const min = computed(() => {
 })
 const fee = computed(() => (dir.value === 'wrap' && amount.value && route.value ? wrapFee(amount.value, route.value.pair.feePercentage) : 0n))
 const bonus = computed(
-  () => dir.value === 'unwrap' && !!referrer.value && !!route.value && affiliateActive(bridge.meta, route.value.chainId, route.value.pair.tokenStandard),
+  () => dir.value === 'unwrap' && !!usableReferrer(recipient.value, referrer.value) && !!route.value && bridge.loaded && affiliateActive(bridge.meta, route.value.chainId, route.value.pair.tokenStandard, bridge.evmNetworks[route.value.chainId]?.height ?? undefined),
 )
 const receive = computed(() => {
   if (!amount.value || !route.value) return 0n
@@ -202,10 +207,12 @@ const estimate = computed(() => {
 })
 
 function setMax() {
+  if (busy.value) return
   if (balance.value !== null) amountText.value = unitsToInput(balance.value, decimals.value)
 }
 
 function flip() {
+  if (busy.value) return
   dir.value = dir.value === 'wrap' ? 'unwrap' : 'wrap'
 }
 
@@ -222,13 +229,20 @@ const blocker = computed<string>(() => {
   if (dir.value === 'unwrap' && !evm.account) return 'Connect EVM wallet'
   if (dir.value === 'unwrap' && evm.chainId !== chainId.value) return `Switch to ${net.value?.name}`
   if (!amountText.value) return 'Enter an amount'
-  if (amount.value === null) return 'Invalid amount'
+  if (amount.value === null) return 'Use a decimal dot; no grouping separators'
   if (amount.value === 0n) return 'Enter an amount'
   if (amount.value < min.value) return `Minimum ${formatUnits(min.value, decimals.value)} ${srcSymbol.value}`
   if (balance.value !== null && amount.value > balance.value) return `Not enough ${srcSymbol.value}`
   if (!recipient.value) return dir.value === 'wrap' ? 'Connect EVM wallet or enter recipient' : 'Connect Syrius or enter recipient'
   if (!recipientValid.value) return 'Invalid recipient'
-  if (bridgeDown() && !sendWhileDown.value) return 'Bridge is down'
+  if (operations.error) return 'Operation history unavailable'
+  const source = dir.value === 'wrap' ? 'zenon' : 'evm'
+  const account = dir.value === 'wrap' ? syrius.address : evm.account
+  const sourceChain = dir.value === 'wrap' ? node.chainId : route.value.chainId
+  if (account && unresolvedOperation(source, sourceChain, account)) return 'Resolve the earlier operation in Activity'
+  const safety = transferBlocker(route.value, dir.value)
+  if (safety) return safety
+  if (balance.value === null || dir.value === 'unwrap' && allowance.value === null) return 'Balance or allowance unavailable'
   return ''
 })
 
@@ -260,84 +274,74 @@ async function onAction() {
   }
 }
 
+function snapshot() {
+  const selected = route.value
+  if (!selected || !amount.value || !recipientValid.value) throw new Error('Transfer details are unavailable')
+  const r = { ...selected, pair: { ...selected.pair } }
+  const captured = { r, amount: amount.value, receive: receive.value, recipient: recipient.value, znn: node.chainId,
+    account: dir.value === 'wrap' ? syrius.address! : evm.account!, provider: evm.selected?.provider,
+    nodeKey: nodeContext(), bonus: bonus.value, referral: referrer.value, createdAt: Math.floor(Date.now() / 1000) }
+  const direction = dir.value
+  const economics = (value: Route | undefined) => JSON.stringify([value?.pair, value?.evmInfo, value?.zts?.decimals, value?.evm?.decimals, bridge.info?.compressedTssECDSAPubKey, bridge.info?.metadata], (_key, value) => typeof value === 'bigint' ? value.toString() : value)
+  const chosenEconomics = economics(r)
+  const guard = () => {
+    if (!mounted) throw new Error('Transfer view changed before submission')
+    if (nodeContext() !== captured.nodeKey || direction !== dir.value || (direction === 'wrap' ? syrius.address : evm.account) !== captured.account ||
+      direction === 'unwrap' && (evm.selected?.provider !== captured.provider || evm.chainId !== r.chainId)) throw new Error('Wallet or network changed before submission')
+    const currentRoute = bridge.routes.find((x) => x.key === r.key)
+    if (economics(currentRoute) !== chosenEconomics) throw new Error('Transfer configuration changed before submission. Review the current amount and limits.')
+    const safety = transferBlocker(currentRoute, direction)
+    if (safety || !bridge.routes.some((x) => x.key === r.key)) throw new Error(safety || 'Route changed before submission')
+  }
+  return { ...captured, guard }
+}
+
 async function sendWrap() {
-  const r = route.value!
+  const s = snapshot()
   sending.value = true
   try {
-    const hash = await sendBlock(
-      wrapTokenBlock({ networkClass: r.networkClass, chainId: r.chainId, toAddress: recipient.value, tokenStandard: r.pair.tokenStandard, amount: amount.value! }),
-    )
-    remember({
-      kind: 'wrap',
-      id: hash,
-      chainId: r.chainId,
-      toAddress: recipient.value.toLowerCase(),
-      from: syrius.address!,
-      tokenStandard: r.pair.tokenStandard,
-      amount: receive.value.toString(),
-      createdAt: Math.floor(Date.now() / 1000),
-    })
-    toast(`Sent. Redeem on ${r.networkName} once signed.`, 'ok', { href: config.zenonExplorerTx(hash), label: 'View' })
-    amountText.value = ''
-    go('activity')
-  } finally {
-    sending.value = false
-  }
+    s.guard()
+    const hash = await sendBlock(wrapTokenBlock({ networkClass: s.r.networkClass, chainId: s.r.chainId, toAddress: s.recipient, tokenStandard: s.r.pair.tokenStandard, amount: s.amount }), s.guard)
+    remember({ kind: 'wrap', id: hash, znn: s.znn, contract: s.r.contract, chainId: s.r.chainId, toAddress: s.recipient.toLowerCase(),
+      from: s.account, tokenStandard: s.r.pair.tokenStandard, amount: s.receive.toString(), createdAt: s.createdAt })
+    toast(`Submitted. Redeem on ${s.r.networkName} once signed.`, 'wait', { href: s.znn === config.zenonChainId ? config.zenonExplorerTx(hash) : '', label: 'View' })
+    if (mounted) { amountText.value = ''; go('activity') }
+  } finally { sending.value = false }
 }
 
 async function approve() {
-  const r = route.value!
+  const s = snapshot()
   approving.value = true
   try {
-    await ensureChain(r.chainId)
-    const w = writeClient(r.chainId, evm.selected!.provider, evm.account!)
-    const hash = await w.writeContract({
-      address: r.pair.tokenAddress as `0x${string}`,
-      abi: erc20Abi,
-      functionName: 'approve',
-      args: [r.contract, amount.value!],
-      chain: w.chain,
-      account: evm.account!,
-    })
-    toast('Approval sent', 'wait', evmTxUrl(r.chainId, hash) ? { href: evmTxUrl(r.chainId, hash), label: 'View' } : undefined)
-    await readClient(r.chainId, walletForReads()).waitForTransactionReceipt({ hash })
+    await ensureChain(s.r.chainId)
+    s.guard()
+    const w = writeClient(s.r.chainId, s.provider!, s.account as `0x${string}`)
+    const token = s.r.pair.tokenAddress as `0x${string}`, args = [s.r.contract, s.amount] as const
+    const hash = await submitTransaction({ chainId: s.r.chainId, account: s.account, kind: 'approve', payload: transactionPayload(token, erc20Abi, 'approve', args) }, s.guard,
+      () => w.writeContract({ address: token, abi: erc20Abi, functionName: 'approve', args, chain: w.chain, account: s.account as `0x${string}` }))
+    toast('Approval submitted', 'wait')
+    await successfulReceipt(readClient(s.r.chainId, { provider: s.provider!, chainId: s.r.chainId }), s.r.chainId, hash)
     await refreshBalances()
-  } finally {
-    approving.value = false
-  }
+  } finally { approving.value = false }
 }
 
 async function sendUnwrap() {
-  const r = route.value!
+  const s = snapshot()
   sending.value = true
   try {
-    await ensureChain(r.chainId)
-    const w = writeClient(r.chainId, evm.selected!.provider, evm.account!)
-    const to = recipientString(recipient.value, bonus.value ? referrer.value : null)
-    const hash = await w.writeContract({
-      address: r.contract,
-      abi: bridgeAbi,
-      functionName: 'unwrap',
-      args: [r.pair.tokenAddress as `0x${string}`, amount.value!, to],
-      chain: w.chain,
-      account: evm.account!,
-    })
-    remember({
-      kind: 'unwrap',
-      txHash: hash,
-      chainId: r.chainId,
-      toAddress: recipient.value,
-      from: evm.account!,
-      tokenAddress: r.pair.tokenAddress,
-      amount: receive.value.toString(),
-      createdAt: Math.floor(Date.now() / 1000),
-    })
-    toast('Sent. Redeem on Zenon once signed.', 'ok', evmTxUrl(r.chainId, hash) ? { href: evmTxUrl(r.chainId, hash), label: 'View' } : undefined)
-    amountText.value = ''
-    go('activity')
-  } finally {
-    sending.value = false
-  }
+    await ensureChain(s.r.chainId)
+    s.guard()
+    const w = writeClient(s.r.chainId, s.provider!, s.account as `0x${string}`)
+    const to = recipientString(s.recipient, s.bonus ? s.referral : null)
+    const args = [s.r.pair.tokenAddress as `0x${string}`, s.amount, to] as const
+    const hash = await submitTransaction({ chainId: s.r.chainId, account: s.account, kind: 'unwrap', payload: transactionPayload(s.r.contract, bridgeAbi, 'unwrap', args) }, s.guard,
+      () => w.writeContract({ address: s.r.contract, abi: bridgeAbi, functionName: 'unwrap', args, chain: w.chain, account: s.account as `0x${string}` }))
+    remember({ kind: 'unwrap', txHash: hash, znn: s.znn, contract: s.r.contract, chainId: s.r.chainId, toAddress: s.recipient,
+      from: s.account, tokenAddress: s.r.pair.tokenAddress, amount: s.receive.toString(), createdAt: s.createdAt })
+    toast('Submitted. Redeem on Zenon once signed.', 'wait', evmTxUrl(s.r.chainId, hash) ? { href: evmTxUrl(s.r.chainId, hash), label: 'View' } : undefined)
+    await successfulReceipt(readClient(s.r.chainId, { provider: s.provider!, chainId: s.r.chainId }), s.r.chainId, hash)
+    if (mounted) { amountText.value = ''; go('activity') }
+  } finally { sending.value = false }
 }
 
 // Plasma: a Zenon address with none cannot send without proof of work.
@@ -374,18 +378,19 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
 
 <template>
   <section class="rise mx-auto grid max-w-[440px] grid-cols-1 gap-2">
+    <h1 class="sr-only">Bridge</h1>
     <div class="flex items-center justify-between px-1">
       <span v-if="estimate" class="inline-flex items-center gap-1.5 text-sm text-dim"><Clock :size="14" />~{{ duration(estimate) }}</span>
       <span v-else />
-      <button class="adv" data-testid="bridge-advanced" @click="advanced = true">
+      <button class="adv" data-testid="bridge-advanced" :disabled="busy" @click="advanced = true">
         Advanced<SlidersHorizontal :size="15" />
-        <span v-if="editingRecipient || sendWhileDown" class="adv-dot" />
+        <span v-if="editingRecipient" class="adv-dot" />
       </button>
     </div>
 
     <!-- From -->
     <div class="leg">
-      <button class="asset" :disabled="!bridge.loaded" @click="picker = true">
+      <button class="asset" :disabled="busy || !bridge.loaded" @click="picker = true">
         <TokenIcon :symbol="srcSymbol" :chain="srcNet" :size="44" />
         <span class="grid min-w-0 flex-1 text-left">
           <span class="text-lg leading-tight font-semibold">{{ srcSymbol || 'From' }}</span>
@@ -394,8 +399,8 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
         <span class="chevron"><ChevronDown :size="16" /></span>
       </button>
       <div class="mt-4 flex items-center gap-3">
-        <input v-model="amountText" class="amount-input mono w-0 min-w-0 flex-1" inputmode="decimal" placeholder="0.00" aria-label="Amount" autocomplete="off" />
-        <button class="max-btn" @click="setMax">Max</button>
+        <input v-model="amountText" :disabled="busy" class="amount-input mono w-0 min-w-0 flex-1" inputmode="decimal" placeholder="0.00" aria-label="Amount" autocomplete="off" />
+        <button class="max-btn" :disabled="busy" @click="setMax">Max</button>
       </div>
       <div class="mt-1 flex h-5 items-center justify-between text-sm text-dim">
         <span>Balance <Amount :value="balance ?? 0n" :decimals="decimals" /></span>
@@ -404,12 +409,12 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
     </div>
 
     <div class="relative z-10 -my-5 flex justify-center">
-      <button data-testid="bridge-flip" class="flip" :class="{ flipped: dir === 'unwrap' }" aria-label="Reverse direction" @click="flip"><ArrowDownUp :size="17" /></button>
+      <button data-testid="bridge-flip" :disabled="busy" class="flip" :class="{ flipped: dir === 'unwrap' }" aria-label="Reverse direction" @click="flip"><ArrowDownUp :size="17" /></button>
     </div>
 
     <!-- To -->
     <div class="leg">
-      <button class="asset" :disabled="!bridge.loaded" @click="picker = true">
+      <button class="asset" :disabled="busy || !bridge.loaded" @click="picker = true">
         <TokenIcon :symbol="dstSymbol" :chain="dstNet" :size="44" />
         <span class="grid min-w-0 flex-1 text-left">
           <span class="text-lg leading-tight font-semibold">{{ dstSymbol || 'To' }}</span>
@@ -480,12 +485,12 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
     <!-- Asset: the network and the token, in one place. -->
     <Modal :open="picker" title="Select asset" @close="picker = false">
       <div v-if="chains.length > 1" class="mb-3 flex flex-wrap gap-2">
-        <button v-for="id in chains" :key="id" class="net-pill" :class="{ active: id === chainId }" @click="chainId = id">
+        <button v-for="id in chains" :key="id" :disabled="busy" class="net-pill" :class="{ active: id === chainId }" @click="chainId = id">
           <TokenIcon :network="evmChain(id).name" :size="20" />{{ evmChain(id).name }}
         </button>
       </div>
       <div class="grid gap-1">
-        <button v-for="r in routes" :key="r.key" class="pick-row" :class="{ active: r.key === routeKey }" @click="((routeKey = r.key), (picker = false))">
+        <button v-for="r in routes" :key="r.key" :disabled="busy" class="pick-row" :class="{ active: r.key === routeKey }" @click="((routeKey = r.key), (picker = false))">
           <TokenIcon :symbol="dir === 'wrap' ? r.zts?.symbol : r.evm?.symbol" :chain="dir === 'wrap' ? 'Zenon' : r.networkName" :size="36" />
           <span class="grid text-left">
             <span class="font-medium">{{ dir === 'wrap' ? r.zts?.symbol : r.evm?.symbol }}</span>
@@ -505,13 +510,13 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
 
     <Modal :open="advanced" title="Advanced" @close="advanced = false">
       <div class="grid grid-cols-1 gap-1">
-        <button class="menu-row !px-0" data-testid="custom-recipient" @click="toggleCustomRecipient">
+        <button class="menu-row !px-0" data-testid="custom-recipient" :disabled="busy" @click="toggleCustomRecipient">
           <span class="flex-1 text-left">Custom recipient</span>
           <span class="switch" role="switch" :aria-checked="editingRecipient" />
         </button>
         <input
           v-if="editingRecipient"
-          v-model="recipientText"
+          v-model="recipientText" :disabled="busy"
           class="field mono slide-down mb-2 text-sm"
           :placeholder="dir === 'wrap' ? '0x…' : 'z1…'"
           aria-label="Recipient"
@@ -519,10 +524,6 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
           spellcheck="false"
         />
         <div v-if="editingRecipient && recipientText && !recipientValid" class="mb-2 text-sm text-danger">Not {{ dir === 'wrap' ? 'an EVM' : 'a Zenon' }} address</div>
-        <button v-if="bridgeDown()" class="menu-row !px-0" @click="sendWhileDown = !sendWhileDown">
-          <span class="flex-1 text-left">Send while the bridge is down</span>
-          <span class="switch" role="switch" :aria-checked="sendWhileDown" />
-        </button>
         <button v-if="route?.evm && evm.selected" class="menu-row !px-0" @click="addToken">
           <span class="flex-1 text-left">Add {{ route.evm.symbol }} to wallet</span><Plus :size="16" />
         </button>
