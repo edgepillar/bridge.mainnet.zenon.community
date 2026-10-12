@@ -22,7 +22,7 @@ import puppeteer, { type Browser, type Page } from 'puppeteer-core'
 import { createServer, type ViteDevServer } from 'vite'
 import { setup, PARAMS, type Deployment } from './setup.ts'
 import { TestOrchestrator } from './orchestrator.ts'
-import { EVM_CHAIN_ID, EVM_RPC, ZNN_CHAIN_ID, ZNN_WS, evmUser, mine, receiveAll, send, drainPublications, zAdmin, evmPublic } from './lib/lab.ts'
+import { EVM_CHAIN_ID, EVM_RPC, ZNN_CHAIN_ID, ZNN_WS, evmUser, mine, receiveAll, send, drainPublications, until, zAdmin, evmPublic } from './lib/lab.ts'
 import { fromBase64 } from '../src/znn/primitives.ts'
 import { erc20Abi } from '../src/evm/abi.ts'
 import type { BlockJson } from '../src/znn/block.ts'
@@ -94,8 +94,18 @@ function installWallets(cfg: { zAddress: string; zChainId: number; zNode: string
 const text = (sel: string) => page.$eval(sel, (e) => (e as HTMLElement).innerText.trim())
 const click = async (sel: string) => {
   await page.waitForSelector(sel, { visible: true })
-  await page.waitForFunction((selector)=>{const e=document.querySelector(selector) as HTMLButtonElement|null;return !!e&&!e.disabled},{timeout:120_000},sel)
-  await page.click(sel)
+  // Dispatch once in the same browser turn that observes an enabled control.
+  // A momentum refresh can disable/move a row during a mouse's scroll/hover.
+  await page.waitForFunction((selector)=>{
+    const e=document.querySelector(selector) as HTMLButtonElement|null
+    if(!e||e.disabled)return false
+    if(e.hasAttribute('data-testid')&&e.dataset.testid==='activity-action') {
+      const a=(window as any).__bridge.activity
+      if(a.loading||!a.readAt||a.error)return false
+    }
+    e.click()
+    return true
+  },{timeout:120_000},sel)
 }
 // The list also holds requests from earlier runs, so a row is addressed by the
 // request it shows: `w:<id>` for a wrap, `u:<evm tx>` for an unwrap.
@@ -108,6 +118,8 @@ async function rowState(keyPrefix: string, states: string[], timeout = 240_000):
       rows: [...document.querySelectorAll('[data-testid="activity-row"]')].map((r) => `${r.getAttribute('data-key')?.slice(0, 14)}=${r.getAttribute('data-state')}`),
       toasts: [...document.querySelectorAll('.toast')].map((t) => t.textContent),
       syrius: JSON.stringify((window as any).__bridge.syrius),
+      activity: (()=>{const a=(window as any).__bridge.activity;return {loading:a.loading,error:a.error,readAt:a.readAt,busy:a.busy}})(),
+      originalOperations: localStorage.getItem('bridge.operations.v1'),
     }))
     throw new Error(`${keyPrefix.slice(0, 14)} never reached ${states.join('/')}: ${err.message.slice(0, 120)}
 ${JSON.stringify(seen)}
@@ -258,7 +270,10 @@ state: ${await page.evaluate(() => { const b = (window as any).__bridge; return 
     await page.waitForSelector(row(unwrapKey), { timeout: 30_000 })
     await mine(Number(PARAMS.evm.confirmations) + 1)
     await rowState(unwrapKey, ['redeem'])
+    const promptsBefore=sentLog.length
     await actOn(unwrapKey, 'redeem')
+    await until('the original Zenon redeem wallet invocation',async()=>sentLog.length>promptsBefore,30_000,250)
+    expect(sentLog.at(-1)).toContain('d4e06c79')
     // The page re-reads 25 s after sending.
     expect(await rowState(unwrapKey, ['done'])).toBe('done')
     expect(sentLog.at(-1)).toContain('d4e06c79') // Redeem, signed by "Syrius"
