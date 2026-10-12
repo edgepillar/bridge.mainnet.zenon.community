@@ -80,6 +80,8 @@ describe('durable original-operation ownership', () => {
     expect(() => updateOperation(entry.id, { state: 'submitted', hash: '0x' + 'cd'.repeat(32) })).toThrow('cannot be replaced')
     expect(operations.entries[0].hash).toBe(hash)
   })
+  // Exercise all 205 durable write/readbacks; instrumented shared CI runners
+  // can exceed the default five-second budget without an assertion failure.
   it('retains nonterminal records when terminal history is bounded', async () => {
     const { beginOperation, updateOperation } = await import('../../src/state/operations.ts')
     const pending = beginOperation(intent)
@@ -91,7 +93,7 @@ describe('durable original-operation ownership', () => {
     const records = JSON.parse(storage.get('bridge.operations.v1')!)
     expect(records).toHaveLength(201)
     expect(records.find((r: { id: string }) => r.id === pending.id)?.state).toBe('unknown')
-  })
+  }, 20_000)
   it('fails closed on malformed storage and intent fields', async () => {
     storage.set('bridge.operations.v1', '{}')
     const { operations, beginOperation, restoreOperations } = await import('../../src/state/operations.ts')
