@@ -1,7 +1,7 @@
 # Build the bridge and publish it to GitHub Pages on every push to main.
 #
 # Settings > Pages > Source must be "GitHub Actions". public/CNAME carries the
-# custom domain into the build, so bridge.mainnet.zenon.community keeps
+# custom domain into the build, so bridge.zenon.foo keeps
 # working. For a project site at <user>.github.io/<repo>/ instead, set the
 # repository variable VITE_BASE to /<repo>/.
 #

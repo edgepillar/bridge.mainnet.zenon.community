@@ -2,7 +2,7 @@ import { defineConfig } from 'vitest/config'
 import vue from '@vitejs/plugin-vue'
 import tailwindcss from '@tailwindcss/vite'
 
-// Served from the root of bridge.mainnet.zenon.community (public/CNAME), so
+// Served from the root of bridge.zenon.foo (public/CNAME), so
 // base stays '/'. A Pages project site under /<repo>/ sets VITE_BASE.
 export default defineConfig({
   base: process.env.VITE_BASE ?? '/',

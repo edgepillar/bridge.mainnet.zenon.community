@@ -9,7 +9,7 @@
 2. Push to `main`.
 
 `public/CNAME` ships in the build, so the custom domain
-`bridge.mainnet.zenon.community` stays attached. To serve the site at
+`bridge.zenon.foo` stays attached. To serve the site at
 `<user>.github.io/<repo>/` instead, delete `public/CNAME` and set the
 repository variable `VITE_BASE` to `/<repo>/`.
 

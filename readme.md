@@ -4,7 +4,7 @@ The front end for the Network of Momentum multichain bridge: move ZNN, QSR and
 LP tokens between Zenon and Ethereum or BNB Chain, redeem them, stake LP in the
 liquidity program, and see whether the orchestrators are signing.
 
-Live at <https://bridge.mainnet.zenon.community>. A static site: no backend,
+Live at <https://bridge.zenon.foo>. A static site: no backend,
 everything is read from a Zenon node and the EVM chains.
 
 ## What it does
