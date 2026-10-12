@@ -5,7 +5,7 @@
 //   3. stake it in Zenon's liquidity contract for 1 to 12 months, weighted 1x
 //      to 12x, then revoke after expiry and collect rewards.
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { Plus, ArrowRight, Loader2, Lock, Unlock, Coins, SlidersHorizontal } from 'lucide-vue-next'
+import { Plus, ArrowRight, Loader2, Lock, Unlock, Coins, SlidersHorizontal } from '@lucide/vue'
 import TokenIcon from '../components/TokenIcon.vue'
 import Amount from '../components/Amount.vue'
 import StatusChip from '../components/StatusChip.vue'

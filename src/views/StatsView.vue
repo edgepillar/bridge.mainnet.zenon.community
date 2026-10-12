@@ -2,7 +2,7 @@
 // Bridge and network stats, read from the chain. Orchestrator status is
 // derived (core/orchestrators.ts): no monitoring service is involved.
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { RefreshCw, ExternalLink } from 'lucide-vue-next'
+import { RefreshCw, ExternalLink } from '@lucide/vue'
 import TokenIcon from '../components/TokenIcon.vue'
 import Amount from '../components/Amount.vue'
 import Address from '../components/Address.vue'

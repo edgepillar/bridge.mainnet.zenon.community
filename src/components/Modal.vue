@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // A bottom sheet on a phone, a centred dialog above the breakpoint.
-import { X } from 'lucide-vue-next'
+import { X } from '@lucide/vue'
 import { nextTick, onUnmounted, ref, watch } from 'vue'
 import { ownDialog } from '../core/dialog.ts'
 const props = defineProps<{ open: boolean; title: string; wide?: boolean }>()

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, ref, watch, type Component } from 'vue'
-import { Sun, Moon, Ellipsis, ArrowLeftRight, History, Droplets, ChartNoAxesColumn, Gift, Github } from 'lucide-vue-next'
+import { Sun, Moon, Ellipsis, ArrowLeftRight, History, Droplets, ChartNoAxesColumn, Gift, CodeXml } from '@lucide/vue'
 import WalletBar from './components/WalletBar.vue'
 import Starfield from './components/Starfield.vue'
 import Banner from './components/Banner.vue'
@@ -100,7 +100,7 @@ const status = computed(() => {
                 <span class="mono text-soft" :class="{ flash }">{{ node.height ? node.height.toLocaleString('en-US') : '…' }}</span>
               </a>
               <a class="menu-row" href="https://github.com/sol-znn/bridge.mainnet.zenon.community" target="_blank" rel="noopener">
-                <Github :size="15" /><span class="flex-1">Source</span>
+                <CodeXml :size="15" /><span class="flex-1">Source</span>
               </a>
             </div>
           </Transition>

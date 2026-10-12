@@ -3,7 +3,7 @@
 // Redeem is open to anyone: on EVM the tokens go to the request's recipient
 // whoever sends the call, and on Zenon the same holds for `Redeem`.
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { ArrowRight, RefreshCw, Search, X, Loader2 } from 'lucide-vue-next'
+import { ArrowRight, RefreshCw, Search, X, Loader2 } from '@lucide/vue'
 import TokenIcon from '../components/TokenIcon.vue'
 import Modal from '../components/Modal.vue'
 import Amount from '../components/Amount.vue'

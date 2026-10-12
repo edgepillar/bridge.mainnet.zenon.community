@@ -6,7 +6,7 @@
 // approve, if the allowance is short, then `unwrap` on the EVM bridge; the
 // Zenon redeem happens later, from Activity.
 import { computed, onUnmounted, ref, watch } from 'vue'
-import { ArrowDownUp, ArrowRight, ChevronDown, Clock, Fuel, Gift, Plus, Loader2, SlidersHorizontal, Zap } from 'lucide-vue-next'
+import { ArrowDownUp, ArrowRight, ChevronDown, Clock, Fuel, Gift, Plus, Loader2, SlidersHorizontal, Zap } from '@lucide/vue'
 import TokenIcon from '../components/TokenIcon.vue'
 import Amount from '../components/Amount.vue'
 import Modal from '../components/Modal.vue'

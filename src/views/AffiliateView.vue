@@ -3,7 +3,7 @@
 // orchestrator pays the unwrapper 1% extra and the referrer 2%, on wZNN and
 // wQSR unwraps where bridge metadata turns the program on.
 import { computed, onUnmounted, ref, watch } from 'vue'
-import { Copy, Check, Share2, Gift, Loader2 } from 'lucide-vue-next'
+import { Copy, Check, Share2, Gift, Loader2 } from '@lucide/vue'
 import Address from '../components/Address.vue'
 import Amount from '../components/Amount.vue'
 import StatusChip from '../components/StatusChip.vue'
