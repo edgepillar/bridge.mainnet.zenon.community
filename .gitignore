@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+*.local
+.env.*.local
+.vite/
+e2e/.state/
+e2e/.cache/
+*.log
+.DS_Store
+Thumbs.db
