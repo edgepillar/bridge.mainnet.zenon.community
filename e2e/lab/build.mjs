@@ -16,7 +16,7 @@ const digest = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex'
 const build = path.join(here, '.build'), source = path.join(build, 'src')
 fs.mkdirSync(build, { recursive: true })
 const archive = run('git', ['-C', checkout, 'archive', pins.goZenonCommit])
-const overlayNames = ['znnd/devnet_bridge.go', 'Dockerfile', 'make-assets.mjs', 'native.mjs', 'verify-build.mjs', 'build.mjs', 'pins.json', 'lab.sh', 'docker-compose.yml', 'frontier.mjs']
+const overlayNames = ['znnd/devnet_bridge.go', 'Dockerfile', 'make-assets.mjs', 'native.mjs', 'verify-build.mjs', 'build.mjs', 'pins.json', 'lab.sh', 'docker-compose.yml', 'frontier.mjs', 'readiness.ts']
 const overlayHashes = Object.fromEntries(overlayNames.map((name) => [name, digest(fs.readFileSync(path.join(here, name)))]))
 const key = digest(JSON.stringify({ pins, archiveHash: digest(archive), overlayHashes }))
 fs.rmSync(source, { recursive: true, force: true }); fs.mkdirSync(source, { recursive: true })
