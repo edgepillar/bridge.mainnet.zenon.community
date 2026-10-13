@@ -475,7 +475,8 @@ async function onAction() {
     if (b === 'Connect EVM wallet') return void (evm.pickerOpen = true)
     if (b.startsWith('Switch to') && chainId.value) return await ensureChain(chainId.value)
     if (b) return
-    if (!accepted.value) return void (termsOpen.value = true)
+    // The terms are the bridge's; a swap does not use it.
+    if (dir.value !== 'swap' && !accepted.value) return void (termsOpen.value = true)
     if (needsApproval.value) return await approve()
     if (dir.value === 'swap') await sendSwap()
     else if (dir.value === 'wrap') await sendWrap()
