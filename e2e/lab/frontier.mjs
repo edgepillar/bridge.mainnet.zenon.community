@@ -6,7 +6,10 @@
 //
 // A chain that has stopped still answers, so one read proves nothing. `--wait`
 // keeps trying until the node answers at all, for the minutes after `up`.
-// Exit status 0 only when the height moved. After syrius-extension's lab.
+// Native qualification additionally requires five exact-height hash matches.
+import fs from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { agreesAtHeight } from './readiness.ts'
 const args = process.argv.slice(2)
 const waitAt = args.indexOf('--wait')
 const wait = waitAt >= 0 ? Number(args.splice(waitAt, 2)[1]) : 0
@@ -57,19 +60,36 @@ if (args.includes('--native')) {
   // Production is insufficient: require convergence across the five nodes at
   // an agreed recent height, after a startup window. Never skip this in CI.
   const end = Date.now() + 300_000
+  const nativeStarted = Date.now()
+  const report = { schema: 1, sourceCommit: execFileSync('git', ['rev-parse', 'HEAD']).toString().trim(), sourceTree: execFileSync('git', ['rev-parse', 'HEAD^{tree}']).toString().trim(), status: 'WAITING',
+    minimumHeight: 20, depth: 3, requiredSamples: 3, windowSeconds: 300, rounds: [] }
+  const record = () => fs.writeFileSync(new URL('./.build/native/readiness-report.json', import.meta.url), JSON.stringify(report, null, 2) + '\n')
   let agreed = 0
   while (agreed < 3) {
     const frontierNow = await frontier()
-    if (frontierNow.height >= 20) {
-      const samples = await Promise.all([46997,47100,47101,47102,47103].map(async (port) => {
-        const r = await fetch(`http://127.0.0.1:${port}`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({jsonrpc:'2.0',id:1,method:'ledger.getMomentumsByHeight',params:[frontierNow.height-3,1]}), signal:AbortSignal.timeout(5000) })
-        const p = await r.json(); return p.result?.list?.[0]
-      }))
-      agreed = samples.every((m) => m?.chainIdentifier === 322 && m.hash === samples[0]?.hash) ? agreed + 1 : 0
-    }
-    if (Date.now() > end) throw new Error('Native nodes did not converge within the qualification window')
+    const targetHeight = frontierNow.height - 3
+    const nodes = await Promise.all([46997,47100,47101,47102,47103].map(async (port) => {
+      const rpc = async (method, params) => {
+        const r = await fetch(`http://127.0.0.1:${port}`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({jsonrpc:'2.0',id:1,method,params}), signal:AbortSignal.timeout(5000) })
+        const p = await r.json()
+        if (!r.ok || p.error) throw new Error('RPC unavailable')
+        return p.result
+      }
+      try {
+        const head = await rpc('ledger.getFrontierMomentum', [])
+        const momentum = frontierNow.height >= 20 ? (await rpc('ledger.getMomentumsByHeight', [targetHeight,1]))?.list?.[0] : null
+        return { port, height: Number.isSafeInteger(head?.height) ? head.height : null, chainId: Number.isSafeInteger(head?.chainIdentifier) ? head.chainIdentifier : null,
+          momentum: momentum && { height: momentum.height, chainIdentifier: momentum.chainIdentifier, hash: momentum.hash }, error: null }
+      } catch { return { port, height: null, chainId: null, momentum: null, error: 'READ_UNAVAILABLE' } }
+    }))
+    const matches = frontierNow.height >= 20 && agreesAtHeight(nodes.map((n) => n.momentum), targetHeight)
+    agreed = matches ? agreed + 1 : 0
+    report.rounds.push({ elapsedMs: Date.now() - nativeStarted, anchorHeight: frontierNow.height, targetHeight, agreed, nodes })
+    record()
+    if (Date.now() > end) { report.status = 'FAILURE'; record(); throw new Error('Native nodes did not converge within the qualification window; inspect readiness-report.json') }
     if (agreed < 3) await pause(10)
   }
+  report.status = moved > 0 ? 'SUCCESS' : 'FAILURE'; record()
   console.log('Five native nodes agree on recent momentum hashes; fixture writes may begin.')
 }
 process.exit(moved > 0 ? 0 : 1)
