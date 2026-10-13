@@ -104,7 +104,7 @@ const status = computed(() => {
     </header>
 
     <div class="mx-auto mt-2 grid w-full max-w-[640px] grid-cols-1 gap-2 px-4">
-      <Banner v-if="downMessage && route !== 'stats'" tone="danger">
+      <Banner v-if="(downMessage || bridge.health?.state === 'down') && route !== 'stats'" tone="danger">
         <strong>{{ networkLabel() }} bridge is down.</strong> {{ downMessage }}
         <template #action><a href="#/stats" class="btn btn-ghost btn-sm -my-1 !text-inherit">Status</a></template>
       </Banner>
