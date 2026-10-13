@@ -75,6 +75,12 @@ at 256 KiB with an eight-second deadline. Browser and Vite cleanup are both atte
 on failure. Use only a fresh fork owned by this qualification run; endpoint/client
 identity alone does not establish ownership of an existing local service.
 
+The preflight follows the pinned Anvil schema: execution identity is in
+`anvil_nodeInfo.environment.chainId`; `anvil_metadata.forkedNetwork` must identify
+Ethereum chain 1, the same fork block number and a valid block hash. A local
+`--chain-id 1` override does not establish the fork source's chain. See the
+[v1.8.5 RPC handlers](https://github.com/foundry-rs/foundry/blob/v1.8.5/crates/anvil/src/eth/api.rs).
+
 Set `BROWSER_PROFILE_DIR` and `QUALIFICATION_CACHE_DIR` to the owned task's private
 locations. Preserve an interrupted journal/profile and actual exit evidence. A
 missing fork, tool or browser is `NOT_RUN`, not a skipped successful integration.

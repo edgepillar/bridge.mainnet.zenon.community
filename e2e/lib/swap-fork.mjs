@@ -61,8 +61,15 @@ export async function assertEthereumFork(rpc, version) {
   }
   if (await rpc('eth_chainId') !== '0x1') throw new Error('The swap fixture requires Ethereum chain 1')
   const info = await rpc('anvil_nodeInfo')
-  if (info?.chainId !== 1 || !Number.isSafeInteger(info.forkConfig?.forkBlockNumber) || info.forkConfig.forkBlockNumber < 1) {
+  if (info?.environment?.chainId !== 1 || (info.network && info.network !== 'ethereum') ||
+      !Number.isSafeInteger(info.forkConfig?.forkBlockNumber) || info.forkConfig.forkBlockNumber < 1) {
     throw new Error('Anvil must identify a forked Ethereum state before fixture writes')
+  }
+  const metadata = await rpc('anvil_metadata')
+  const fork = metadata?.forkedNetwork
+  if (metadata?.chainId !== 1 || fork?.chainId !== 1 || fork.forkBlockNumber !== info.forkConfig.forkBlockNumber ||
+      typeof fork.forkBlockHash !== 'string' || !/^0x[0-9a-f]{64}$/i.test(fork.forkBlockHash)) {
+    throw new Error('Anvil fork source identity is missing or mismatching')
   }
   return { clientVersion: client, forkBlockNumber: info.forkConfig.forkBlockNumber }
 }
