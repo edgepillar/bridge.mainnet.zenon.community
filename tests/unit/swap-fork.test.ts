@@ -21,11 +21,13 @@ describe('swap fork publication preflight', () => {
     expect(fetcher).not.toHaveBeenCalled()
   })
   it('requires the pinned client, Ethereum chain and actual fork metadata using reads only', async () => {
+    // Pinned Anvil v1.8.5 uses NodeInfo.environment and a separate Metadata reply.
     const replies: Record<string, unknown> = { web3_clientVersion:'anvil/v1.8.5', eth_chainId:'0x1',
-      anvil_nodeInfo:{chainId:1,forkConfig:{forkBlockNumber:22000000,forkUrl:'private'}} }
+      anvil_nodeInfo:{environment:{chainId:1},network:'ethereum',forkConfig:{forkBlockNumber:22000000,forkUrl:'private'}},
+      anvil_metadata:{chainId:1,forkedNetwork:{chainId:1,forkBlockNumber:22000000,forkBlockHash:'0x'+'ab'.repeat(32)}} }
     const rpc = vi.fn(async (method: string) => replies[method])
     await expect(assertEthereumFork(rpc, '1.8.5')).resolves.toEqual({clientVersion:'anvil/v1.8.5',forkBlockNumber:22000000})
-    expect(rpc.mock.calls.map(([method]) => method)).toEqual(['web3_clientVersion','eth_chainId','anvil_nodeInfo'])
+    expect(rpc.mock.calls.map(([method]) => method)).toEqual(['web3_clientVersion','eth_chainId','anvil_nodeInfo','anvil_metadata'])
   })
   it('does not accept a live client or a different Anvil version', async () => {
     for (const client of ['Geth/v1.8.5', 'anvil/v1.8.50', 'anvil/v1.7.0']) {
@@ -40,11 +42,28 @@ describe('swap fork publication preflight', () => {
     expect(rpc).toHaveBeenCalledTimes(2)
   })
   it('refuses non-forked, malformed or mismatching fork metadata', async () => {
-    for (const info of [{chainId:1}, {chainId:1,forkConfig:{forkBlockNumber:0}},
-      {chainId:1,forkConfig:{forkBlockNumber:'22000000'}}, {chainId:31337,forkConfig:{forkBlockNumber:22000000}}]) {
+    for (const info of [{environment:{chainId:1}}, {environment:{chainId:1},forkConfig:{forkBlockNumber:0}},
+      {environment:{chainId:1},forkConfig:{forkBlockNumber:'22000000'}}, {environment:{chainId:31337},forkConfig:{forkBlockNumber:22000000}},
+      {chainId:1,forkConfig:{forkBlockNumber:22000000}}, {environment:{chainId:1},network:'base',forkConfig:{forkBlockNumber:22000000}}]) {
       const rpc = vi.fn().mockResolvedValueOnce('anvil/v1.8.5').mockResolvedValueOnce('0x1').mockResolvedValueOnce(info)
       await expect(assertEthereumFork(rpc, '1.8.5')).rejects.toThrow('forked Ethereum')
       expect(rpc).toHaveBeenCalledTimes(3)
+    }
+  })
+  it('refuses a different source chain hidden by a local chain override', async () => {
+    const rpc = vi.fn().mockResolvedValueOnce('anvil/v1.8.5').mockResolvedValueOnce('0x1')
+      .mockResolvedValueOnce({environment:{chainId:1},forkConfig:{forkBlockNumber:22000000}})
+      .mockResolvedValueOnce({chainId:1,forkedNetwork:{chainId:56,forkBlockNumber:22000000,forkBlockHash:'0x'+'ab'.repeat(32)}})
+    await expect(assertEthereumFork(rpc,'1.8.5')).rejects.toThrow('source identity')
+    expect(rpc).toHaveBeenCalledTimes(4)
+  })
+  it('refuses incomplete or mismatching source block identity', async () => {
+    for (const fork of [undefined,{chainId:1,forkBlockNumber:21999999,forkBlockHash:'0x'+'ab'.repeat(32)},
+      {chainId:1,forkBlockNumber:22000000,forkBlockHash:'not-a-hash'}]) {
+      const rpc = vi.fn().mockResolvedValueOnce('anvil/v1.8.5').mockResolvedValueOnce('0x1')
+        .mockResolvedValueOnce({environment:{chainId:1},forkConfig:{forkBlockNumber:22000000}})
+        .mockResolvedValueOnce({chainId:1,forkedNetwork:fork})
+      await expect(assertEthereumFork(rpc,'1.8.5')).rejects.toThrow('source identity')
     }
   })
   it('the actual CLI sends no fixture writes to a rejected client', async () => {
