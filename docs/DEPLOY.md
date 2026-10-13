@@ -56,3 +56,7 @@ bot's QSR. So:
 
 No server, no analytics, no remote scripts. Everything the page needs is in
 `dist/`; the workflow fails the build if `dist/` references a CDN.
+
+The page does call three kinds of third-party API at run time: the Zenon and
+EVM nodes, zenonhub's plasma bot, and `li.quest` (LI.FI) for swap quotes. The
+last needs no key; unkeyed it allows 75 quotes per two hours per address.

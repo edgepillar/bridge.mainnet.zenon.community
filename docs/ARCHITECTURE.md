@@ -123,9 +123,61 @@ Every write is signed by the user's wallet.
 | Stake LP | Syrius | send to the liquidity contract, `LiquidityStake(seconds)` |
 | Revoke, collect | Syrius | `CancelLiquidityStake(id)`, `CollectReward()` |
 | Add liquidity | EVM | `approve`, `addLiquidityETH` on the Uniswap V2 router |
+| Swap | EVM | `approve` if short, then the transaction LI.FI quoted, to its router |
 
 A redeem simulates first, so bridge.sol's revert reason ("not redeemable yet",
 "nonce already redeemed") is shown instead of a failed transaction.
+
+## Swaps
+
+An EVM asset can go to another EVM asset, on the same chain or on the other
+one, without the bridge: ETH to wZNN, wZNN on Ethereum to BNB, and so on. The
+assets are each chain's coin and the bridge's own tokens there, less pool
+shares. `src/core/swap.ts` asks LI.FI (`li.quest/v1/quote`) for a route; LI.FI
+is the aggregator Jumper and MetaMask's bridge use, it answers a browser with
+no key, and it already routes wZNN. It picks the DEX or the third-party bridge.
+Calling 1inch or Uniswap directly was set aside: 1inch's API needs a key and
+refuses browsers, and a Uniswap router call covers one chain only.
+
+```mermaid
+sequenceDiagram
+  participant P as Page
+  participant L as LI.FI API
+  participant W as EVM wallet
+  participant S as Source chain
+  participant D as Destination chain
+
+  P->>L: quote (assets, amount, sender, recipient)
+  L-->>P: amount out, minimum, time, transaction
+  Note over P: refused unless the transaction and the approval name LI.FI's router
+  opt token source, allowance short
+    P->>W: approve router for the amount
+    W->>S: approve
+  end
+  P->>W: send the quoted transaction
+  W->>S: swap, or lock for the third-party bridge
+  alt same chain
+    S-->>P: receipt, funds at the recipient
+  else two chains
+    loop every 6 s, up to 10 min
+      P->>L: status (tx hash)
+      L-->>P: pending, done or failed
+    end
+    D-->>P: funds at the recipient
+  end
+```
+
+What changes on the page for a swap: Syrius is not asked for, the time shown is
+the quote's (seconds, not the bridge's half hour), the recipient is an EVM
+address and can still be a custom one, the bridge-down block does not apply,
+and the details list the route, the minimum received and the fee in dollars.
+
+Limits. The quote is asked for when an input settles, not on a timer, because
+the unkeyed API allows 75 per two hours per address. A quote older than a
+minute is asked for again on send, and a worse one is shown before anything is
+signed. A swap is not a bridge request, so Activity does not list it: it is
+followed with toasts in the tab that sent it, and a reload loses that. LI.FI
+takes a fee on every route, shown in the details.
 
 ## Design
 

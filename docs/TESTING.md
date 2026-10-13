@@ -23,6 +23,7 @@ themselves.
 | `signatures.test.ts` | A wrap signed by the mainnet orchestrators recovers to the bridge's TSS key through the app's message layout and `evmSignature` |
 | `referral.test.ts` | Codes equal the original app's; first referral wins; the unwrap suffix is the decoded address |
 | `core.test.ts` | Fees (against a real mainnet wrap), formatting, wrap and unwrap status, revert reasons, affiliate metadata, the plasma bot call, big-integer JSON |
+| `swap.test.ts` | The LI.FI quote request and reading; a quote naming any contract but the router, or another amount, is refused; rate limit, missing route, transfer status, time estimate |
 | `orchestrators.test.ts` | The health verdict: halted, key generation, stalled (mainnet as read on 2026-10-12), delayed, online, idle |
 
 ## End to end
