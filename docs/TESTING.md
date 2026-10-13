@@ -51,7 +51,7 @@ fork of Ethereum, so the quoted transactions really execute:
 docker run -d --rm --name swap-fork -p 46599:8545 --entrypoint anvil \
   ghcr.io/foundry-rs/foundry:v1.8.5@sha256:32c8ea9ef052a440cb1620175987a3f49eff8b068a0c6a3d09ebf7f5f9a0e043 --host 0.0.0.0 --chain-id 1 \
   --fork-url https://ethereum-rpc.publicnode.com
-npm run test:swap
+SWAP_FORK=http://127.0.0.1:46599 CHROME_PATH=<pinned-fixture-browser> npm run test:swap
 docker rm -f swap-fork
 ```
 
@@ -66,6 +66,18 @@ fork drifts from them.
 
 
 The fork script is inherited upstream integration tooling. It was not run as part of the offline or two-chain devnet qualification. Use a fresh isolated fork, the pinned browser and public fixture accounts; never connect a real funded wallet. Router API success or a local fork receipt does not prove destination-chain delivery.
+
+The fixture refuses a nonliteral-loopback endpoint, credentials/routing data,
+redirects, the wrong Anvil version or chain, and missing fork metadata before
+fixture writes. It also requires the pinned browser. The mock wallet forwards to
+the same bounded Node RPC adapter; responses are paired to their request and capped
+at 256 KiB with an eight-second deadline. Browser and Vite cleanup are both attempted
+on failure. Use only a fresh fork owned by this qualification run; endpoint/client
+identity alone does not establish ownership of an existing local service.
+
+Set `BROWSER_PROFILE_DIR` and `QUALIFICATION_CACHE_DIR` to the owned task's private
+locations. Preserve an interrupted journal/profile and actual exit evidence. A
+missing fork, tool or browser is `NOT_RUN`, not a skipped successful integration.
 
 The offline swap component case uses router and wallet stand-ins, delays the original wallet reply, changes the selected account, and verifies that the durable record retains the original payload, amount, account and hash. Parser regressions reject expired/malformed replies, unsafe amounts and malformed calldata. `readiness.test.ts` rejects a node returning the same genesis hash when a recent height was requested, as well as missing, wrong-chain and divergent responses.
 
