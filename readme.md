@@ -27,6 +27,7 @@ two) do not go through the orchestrators. A router quotes one transaction and
 the wallet sends it: KyberSwap on one chain, Across between the two, LI.FI
 when neither has a route. A swap settles in seconds, needs an EVM wallet only,
 and keeps working while the bridge is down. Amounts carry a dollar estimate.
+A Bridge or Swap toggle above the form picks the mode; Bridge is the default.
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), Swaps and Prices.
 
 What the original app did, flow by flow, is in

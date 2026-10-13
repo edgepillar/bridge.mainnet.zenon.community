@@ -10,6 +10,9 @@
 // router quotes a route through a DEX or a third-party bridge and the wallet
 // sends one transaction (src/core/swap.ts). It needs an EVM wallet only, and
 // it works while the orchestrators are not signing.
+//
+// A toggle at the top picks which of the two the form does. Bridge, the
+// default, offers only Zenon to EVM and back; Swap offers only EVM assets.
 import { computed, ref, watch } from 'vue'
 import { ArrowDownUp, ChevronDown, Clock, Fuel, Gift, Plus, Loader2, SlidersHorizontal, Zap } from 'lucide-vue-next'
 import TokenIcon from '../components/TokenIcon.vue'
@@ -23,6 +26,7 @@ import { referrer } from '../state/referral.ts'
 import { remember } from '../state/activity.ts'
 import { accepted } from '../state/ack.ts'
 import { go, bridgePrefill } from '../state/router.ts'
+import { mode, checkSwap, type Mode } from '../state/swap.ts'
 import { toast, toastError } from '../state/toasts.ts'
 import { readClient, writeClient } from '../evm/client.ts'
 import { bridgeAbi, erc20Abi } from '../evm/abi.ts'
@@ -107,16 +111,6 @@ const swapAssets = computed<SwapAsset[]>(() => {
   }
   return out
 })
-const unwrapRoute = (a: SwapAsset | null) =>
-  a ? bridge.routes.find((r) => r.canUnwrap && r.chainId === a.chainId && r.pair.tokenAddress.toLowerCase() === a.address.toLowerCase()) : undefined
-// The EVM asset being sent, whichever way it is going.
-const evmSource = computed<SwapAsset | null>(() => {
-  if (dir.value === 'swap') return swapFrom.value
-  const r = route.value
-  if (dir.value !== 'unwrap' || !r?.evm) return null
-  return { chainId: r.chainId, address: r.pair.tokenAddress, symbol: r.evm.symbol, decimals: r.evm.decimals }
-})
-
 function setBridge(d: 'wrap' | 'unwrap', r: Route) {
   dir.value = d
   chainId.value = r.chainId
@@ -128,10 +122,10 @@ function setSwap(from: SwapAsset, to: SwapAsset) {
   chainId.value = from.chainId
   dir.value = 'swap'
 }
-/** Where a source with no way to Zenon goes first: the last destination, or the first other asset on its chain. */
+/** Where a new source goes first: the destination already chosen, or the first other asset on its chain. */
 function defaultSwapTarget(from: SwapAsset): SwapAsset | undefined {
   if (swapTo.value && !sameAsset(swapTo.value, from)) return swapTo.value
-  return swapAssets.value.find((a) => a.chainId === from.chainId && !sameAsset(a, from))
+  return swapAssets.value.find((a) => a.chainId === from.chainId && !sameAsset(a, from)) ?? swapAssets.value.find((a) => !sameAsset(a, from))
 }
 
 // Each side is picked on its own. An option is one asset on one chain;
@@ -162,48 +156,70 @@ const zenonSources = computed<Option[]>(() => {
   }
   return out
 })
-function evmSources(id: number): Option[] {
-  const out: Option[] = bridge.routes
-    .filter((r) => r.canUnwrap && r.chainId === id)
+const unwrapSources = computed<Option[]>(() =>
+  bridge.routes
+    .filter((r) => r.canUnwrap)
     .map((r) => ({
       id: r.key,
       symbol: r.evm?.symbol ?? '',
       network: r.networkName,
-      active: sameAsset(evmSource.value, { chainId: id, address: r.pair.tokenAddress, symbol: '', decimals: 0 }),
-      // A token the bridge carries goes to Zenon unless another destination is picked.
+      active: dir.value === 'unwrap' && r.key === routeKey.value,
       apply: () => setBridge('unwrap', r),
-    }))
+    })),
+)
+const swapSources = computed<Option[]>(() => {
+  const out: Option[] = []
   for (const a of swapAssets.value) {
-    if (a.chainId !== id || unwrapRoute(a)) continue
     const to = defaultSwapTarget(a)
-    if (to) out.push({ id: assetKey(a), symbol: a.symbol, network: evmChain(id).name, active: sameAsset(evmSource.value, a), apply: () => setSwap(a, to) })
-  }
-  return out
-}
-// There are few enough assets that each side lists all it can take, with no filter.
-const options = computed<Option[]>(() => {
-  if (picker.value === 'from') {
-    const chainsWithSources = new Set([...bridge.routes.filter((r) => r.canUnwrap).map((r) => r.chainId), ...swapAssets.value.map((a) => a.chainId)])
-    return [...zenonSources.value, ...[...chainsWithSources].flatMap(evmSources)]
-  }
-  const cur = route.value
-  if (dir.value === 'wrap') {
-    if (!cur) return []
-    // A Zenon token leaves through the bridge only: one chain per route.
-    return bridge.routes
-      .filter((r) => r.canWrap && r.pair.tokenStandard === cur.pair.tokenStandard)
-      .map((r) => ({ id: r.key, symbol: r.evm?.symbol ?? '', network: r.networkName, active: r.key === routeKey.value, apply: () => setBridge('wrap', r) }))
-  }
-  const src = evmSource.value
-  if (!src) return []
-  const home = unwrapRoute(src)
-  const out: Option[] = home ? [{ id: home.key, symbol: home.zts?.symbol ?? '', network: 'Zenon', active: dir.value === 'unwrap', apply: () => setBridge('unwrap', home) }] : []
-  for (const a of swapAssets.value) {
-    if (sameAsset(a, src)) continue
-    out.push({ id: assetKey(a), symbol: a.symbol, network: evmChain(a.chainId).name, active: dir.value === 'swap' && sameAsset(swapTo.value, a), apply: () => setSwap(src, a) })
+    if (to) out.push({ id: assetKey(a), symbol: a.symbol, network: evmChain(a.chainId).name, active: sameAsset(swapFrom.value, a), apply: () => setSwap(a, to) })
   }
   return out
 })
+// There are few enough assets that each side lists all it can take, with no filter.
+const options = computed<Option[]>(() => {
+  if (dir.value === 'swap') {
+    if (picker.value === 'from') return swapSources.value
+    const src = swapFrom.value
+    return swapAssets.value
+      .filter((a) => !sameAsset(a, src))
+      .map((a) => ({ id: assetKey(a), symbol: a.symbol, network: evmChain(a.chainId).name, active: sameAsset(swapTo.value, a), apply: () => src && setSwap(src, a) }))
+  }
+  if (picker.value === 'from') return [...zenonSources.value, ...unwrapSources.value]
+  const cur = route.value
+  if (!cur) return []
+  // A token crosses to its own counterpart only: one chain per route from Zenon, Zenon alone from an EVM chain.
+  if (dir.value === 'unwrap') return [{ id: cur.key, symbol: cur.zts?.symbol ?? '', network: 'Zenon', active: true, apply: () => setBridge('unwrap', cur) }]
+  return bridge.routes
+    .filter((r) => r.canWrap && r.pair.tokenStandard === cur.pair.tokenStandard)
+    .map((r) => ({ id: r.key, symbol: r.evm?.symbol ?? '', network: r.networkName, active: r.key === routeKey.value, apply: () => setBridge('wrap', r) }))
+})
+
+// The toggle. Each mode comes back to what it last showed.
+let lastBridge: { dir: 'wrap' | 'unwrap'; key: string } | null = null
+function setMode(m: Mode) {
+  if (m === mode.value) return
+  if (m === 'swap') {
+    if (dir.value !== 'swap' && route.value) lastBridge = { dir: dir.value, key: route.value.key }
+    const from = swapFrom.value ?? swapAssets.value.find(isNative)
+    const to = from && (swapTo.value ?? defaultSwapTarget(from))
+    if (from && to) setSwap(from, to)
+    return
+  }
+  const r = lastBridge && bridge.routes.find((x) => x.key === lastBridge!.key)
+  if (r) setBridge(lastBridge!.dir, r)
+  else dir.value = 'wrap'
+}
+watch(
+  dir,
+  (d) => {
+    mode.value = d === 'swap' ? 'swap' : 'bridge'
+    if (d !== 'swap') return
+    const from = swapAssets.value.find(isNative)
+    const to = from && swapAssets.value.find((a) => a.chainId === from.chainId && !isNative(a))
+    void checkSwap(from && to ? { from, to } : null)
+  },
+  { immediate: true },
+)
 function openPicker(side: 'from' | 'to') {
   picker.value = side
 }
@@ -351,7 +367,7 @@ watch(
       const r = await fetchQuote(config.swap!, req)
       if (seq !== quoteSeq) return
       if (r.ok) quote.value = r.quote
-      else quoteError.value = r.message.length <= 40 ? r.message : 'No route'
+      else quoteError.value = r.message !== 'No route' && r.message.length <= 40 ? r.message : 'No route found'
     }, 700)
   },
 )
@@ -449,7 +465,7 @@ const needsApproval = computed(
 const blocker = computed<string>(() => {
   const swap = dir.value === 'swap'
   if (!swap && !bridge.loaded) return 'Loading'
-  if (swap ? !swapFrom.value || !swapTo.value : !route.value) return 'No route'
+  if (swap ? !swapFrom.value || !swapTo.value : !route.value) return 'No route found'
   if (dir.value === 'wrap' && !syrius.address) return syrius.present ? 'Connect Syrius' : 'Install Syrius'
   if (dir.value === 'wrap' && wrongZenonChain()) return 'Syrius is on another chain'
   if (dir.value !== 'wrap' && !evm.account) return 'Connect EVM wallet'
@@ -664,6 +680,12 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
 
 <template>
   <section class="rise mx-auto grid max-w-[440px] grid-cols-1 gap-2">
+    <div v-if="config.swap" class="flex justify-center">
+      <div class="seg" role="tablist">
+        <button role="tab" data-testid="mode-bridge" :aria-selected="mode === 'bridge'" :class="{ active: mode === 'bridge' }" @click="setMode('bridge')">Bridge</button>
+        <button role="tab" data-testid="mode-swap" :aria-selected="mode === 'swap'" :class="{ active: mode === 'swap' }" :disabled="!bridge.loaded" @click="setMode('swap')">Swap</button>
+      </div>
+    </div>
     <div class="flex items-center justify-between px-1">
       <span v-if="estimate" class="inline-flex items-center gap-1.5 text-sm text-dim"><Clock :size="14" />~{{ duration(estimate) }}</span>
       <span v-else />
@@ -851,6 +873,34 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
 </template>
 
 <style scoped>
+.seg {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card-glass);
+  backdrop-filter: blur(10px);
+}
+.seg button {
+  min-height: 44px;
+  padding: 0 22px;
+  border-radius: 999px;
+  color: var(--dim);
+  font-size: 15px;
+  font-weight: 500;
+  transition:
+    background 180ms var(--ease),
+    color 180ms var(--ease);
+}
+.seg button:hover {
+  color: var(--fg);
+}
+.seg button.active {
+  background: var(--raised);
+  color: var(--fg);
+  box-shadow: var(--edge);
+}
 .adv {
   position: relative;
   display: inline-flex;

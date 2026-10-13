@@ -285,6 +285,39 @@ export async function fetchStatus(c: SwapConfig, provider: Provider, txHash: str
   }
 }
 
+export interface RouterHealth {
+  /** A router that swaps on one chain answered. */
+  sameChain: boolean
+  /** A router that moves between the chains answered. */
+  crossChain: boolean
+}
+
+/**
+ * Whether the routers can be reached and have routes, asked before the user
+ * has typed anything: KyberSwap for a route on `sample`, Across for its routes
+ * between the two chains, LI.FI for its chain list. None of these builds a
+ * transaction or counts against a quote limit.
+ */
+export async function checkRouters(c: SwapConfig, sample: { from: SwapAsset; to: SwapAsset } | null, fetcher: typeof fetch = fetch): Promise<RouterHealth> {
+  const ask = async (url: string, good: (body: any) => boolean): Promise<boolean> => {
+    try {
+      const res = await fetcher(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(8000) })
+      return res.ok && good(await json(res))
+    } catch {
+      return false
+    }
+  }
+  const [a, b] = c.chains
+  const [kyber, across, lifi] = await Promise.all([
+    sample
+      ? ask(kyberRouteUrl(c, { ...sample, amount: 10n ** BigInt(Math.max(sample.from.decimals - 2, 0)), fromAddress: '', toAddress: '' }), (x) => !!x?.data?.routeSummary)
+      : Promise.resolve(false),
+    ask(`${c.across.api}/available-routes?${new URLSearchParams({ originChainId: String(a), destinationChainId: String(b) })}`, (x) => Array.isArray(x) && x.length > 0),
+    ask(`${c.lifi.api}/chains`, (x) => Array.isArray(x?.chains) && x.chains.length > 0),
+  ])
+  return { sameChain: kyber || lifi, crossChain: across || lifi }
+}
+
 /** Time shown before a quote arrives, and added to one for the sending block. */
 export function swapEstimate(from: SwapAsset, to: SwapAsset, sourceBlockSeconds: number, quote: Quote | null): number {
   const settle = quote ? quote.seconds : from.chainId === to.chainId ? 0 : 10

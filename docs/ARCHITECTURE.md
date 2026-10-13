@@ -201,6 +201,17 @@ answered, and its value is the amount entered for a coin and zero for a token.
 A quote refused that way is shown; it is not replaced by another router's.
 Approvals are for the amount, not unlimited.
 
+A toggle above the form, Bridge or Swap, picks which of the two the page
+does; Bridge is the default. In Bridge the pickers offer only a Zenon token
+and its EVM counterpart. In Swap they offer only EVM assets. Each mode comes
+back to the pair it last showed. The mode is shared state
+(`src/state/swap.ts`) because the banners follow it: in Swap the bridge-down
+banner is hidden, and on entering Swap the page asks each router something
+cheap (`checkRouters`: a KyberSwap route, Across's route list, LI.FI's chain
+list, none of them a quote). If neither kind of swap has a router that
+answers, or only one kind has, a banner says so. A pair with no route reads
+"No route found" on the button.
+
 What changes on the page for a swap: Syrius is not asked for, the bridge's
 terms are not asked for, the time shown is the quote's (seconds, not the
 bridge's half hour), the recipient is an EVM address and can still be a custom
@@ -246,6 +257,8 @@ short:
 - Every token icon carries its chain's badge. A picker row is one asset on one
   chain; each side has its own picker, with no filters, and a valid default
   pair is always selected.
+- A Bridge or Swap toggle above the form, a segmented pill, that narrows the
+  pickers and the banners to the mode.
 - One main button that says what is missing, then the action. Cost and steps
   in a collapsed Details list. Rare controls behind Advanced and the wallet
   menu.

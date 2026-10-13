@@ -120,9 +120,19 @@ try {
   await p.waitForSelector('[data-testid="bridge-from-usd"]', { timeout: 20000 })
   check('bridge shows dollar estimates', /\$/.test(await usd()), `100 ZNN: ${await usd()}`)
 
+  // Bridge is the default mode: Zenon on one side, always.
+  const banner = () => p.evaluate(() => [...document.querySelectorAll('strong')].map((e) => e.parentElement.innerText.trim()).filter((t) => /is down|unavailable/i.test(t)))
+  const bridged = await choose('from', 'ZNN', 'Zenon')
+  check('Bridge mode offers no swap-only asset', bridged.pills === 0 && !bridged.options.some((o) => /^(ETH|BNB)\//.test(o)), JSON.stringify(bridged.options))
+  console.log('bridge banner  ', JSON.stringify(await banner()))
+
+  await p.click('[data-testid="mode-swap"]')
+  await sleep(2500)
+  check('Swap mode starts on a valid pair', (await legs()) === 'ETH / Ethereum -> wZNN / Ethereum', await legs())
+  const said0 = await banner()
+  check('Swap mode hides the bridge banner, and the routers answer', said0.length === 0, JSON.stringify(said0))
   const from = await choose('from', 'ETH', 'Ethereum')
-  check('From lists everything with no filter', from.pills === 0 && from.options.some((o) => o.includes('Zenon')) && from.options.some((o) => o.includes('BNB Chain')), JSON.stringify(from.options))
-  console.log('picked ETH     ', await legs())
+  check('Swap mode offers EVM assets only, with no filter', from.pills === 0 && !from.options.some((o) => o.includes('Zenon')) && from.options.some((o) => o.includes('BNB Chain')), JSON.stringify(from.options))
   await setAmount('0.05')
   await waitAction('Connect EVM wallet')
   await p.waitForFunction(() => document.querySelector('[data-testid="bridge-receive"]').innerText.trim() !== '0.00', { timeout: 30000 })
@@ -193,8 +203,9 @@ try {
   await p.waitForFunction(() => /Approve wZNN|Swap to BNB Chain/.test(document.querySelector('[data-testid="bridge-action"]').innerText), { timeout: 60000 }).catch(() => {})
   console.log('wZNN to BNB    ', await action(), '|', await maybe('[data-testid="swap-via"]'), '|', await text('[data-testid="bridge-receive"]'))
 
-  await choose('to', 'ZNN', 'Zenon')
-  check('a Zenon destination is still one pick away', (await legs()).endsWith('ZNN / Zenon'), await legs())
+  await p.click('[data-testid="mode-bridge"]')
+  await sleep(300)
+  check('Bridge mode comes back to its own pair', (await legs()) === 'ZNN / Zenon -> wZNN / Ethereum', await legs())
   check('no page errors', errs.length === 0, errs.join(' | '))
 } catch (e) {
   failed = true

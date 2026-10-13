@@ -20,6 +20,7 @@ import { referrer, clearReferral } from './state/referral.ts'
 import { actionCount } from './state/activity.ts'
 import { toasts, dismiss } from './state/toasts.ts'
 import { config, zenonNetworkName } from './config.ts'
+import { mode, swapMessage } from './state/swap.ts'
 
 const views = { bridge: BridgeView, activity: ActivityView, liquidity: LiquidityView, stats: StatsView, affiliate: AffiliateView }
 const current = computed(() => views[route.value])
@@ -41,6 +42,8 @@ watch(
   () => node.notice,
   () => (noticeHidden.value = false),
 )
+// The bridge's state says nothing about a swap, and a swap's routers nothing about the bridge.
+const swapping = computed(() => route.value === 'bridge' && mode.value === 'swap')
 const downMessage = computed(() => {
   // Stalled: the banner says what it means for the user; Stats has the detail.
   if (bridge.health?.state === 'down') return config.swap ? 'Swaps still work.' : ''
@@ -104,7 +107,10 @@ const status = computed(() => {
     </header>
 
     <div class="mx-auto mt-2 grid w-full max-w-[640px] grid-cols-1 gap-2 px-4">
-      <Banner v-if="(downMessage || bridge.health?.state === 'down') && route !== 'stats'" tone="danger">
+      <Banner v-if="swapping && swapMessage" tone="danger">
+        <strong>Swaps are unavailable.</strong> {{ swapMessage }}
+      </Banner>
+      <Banner v-if="(downMessage || bridge.health?.state === 'down') && route !== 'stats' && !swapping" tone="danger">
         <strong>{{ networkLabel() }} bridge is down.</strong> {{ downMessage }}
         <template #action><a href="#/stats" class="btn btn-ghost btn-sm -my-1 !text-inherit">Status</a></template>
       </Banner>

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   NATIVE,
   acrossUrl,
+  checkRouters,
   fetchPrice,
   fetchQuote,
   fetchStatus,
@@ -169,6 +170,32 @@ describe('swap routing', () => {
     expect(await fetchQuote(cfg, req({ to: bnb }), as(limited))).toEqual({ ok: false, message: 'Too many quotes. Try again later.' })
     const none = respond({ kyberswap: { status: 400, body: {} }, 'li.quest': { status: 404, body: { message: 'x' } } })
     expect(await fetchQuote(cfg, req(), as(none))).toEqual({ ok: false, message: 'No route' })
+  })
+})
+
+describe('swap availability', () => {
+  const up = { kyberswap: { body: { data: { routeSummary: {} } } }, 'available-routes': { body: [{ originChainId: 1 }] }, '/chains': { body: { chains: [{ id: 1 }] } } }
+  const down = { status: 503, body: {} }
+  it('asks each router something cheap', async () => {
+    const f = respond(up)
+    expect(await checkRouters(cfg, { from: eth, to: wznn }, as(f))).toEqual({ sameChain: true, crossChain: true })
+    const urls = f.mock.calls.map((c) => String(c[0]))
+    expect(urls.some((u) => u.includes('/ethereum/api/v1/routes?') && u.includes('amountIn=10000000000000000'))).toBe(true)
+    expect(urls).toContain('https://app.across.to/api/available-routes?originChainId=1&destinationChainId=56')
+    expect(urls).toContain('https://li.quest/v1/chains')
+    expect(urls.some((u) => u.includes('/quote') || u.includes('/build'))).toBe(false)
+  })
+  it('counts LI.FI for both kinds, so one router down is not an outage', async () => {
+    expect(await checkRouters(cfg, { from: eth, to: wznn }, as(respond({ ...up, kyberswap: down })))).toEqual({ sameChain: true, crossChain: true })
+    expect(await checkRouters(cfg, { from: eth, to: wznn }, as(respond({ ...up, 'available-routes': { body: [] } })))).toEqual({ sameChain: true, crossChain: true })
+  })
+  it('says which kind has no route, and that nothing has', async () => {
+    expect(await checkRouters(cfg, { from: eth, to: wznn }, as(respond({ ...up, 'available-routes': down, '/chains': down })))).toEqual({ sameChain: true, crossChain: false })
+    expect(await checkRouters(cfg, { from: eth, to: wznn }, as(respond({ ...up, kyberswap: down, '/chains': down })))).toEqual({ sameChain: false, crossChain: true })
+    const dead = vi.fn(async () => {
+      throw new Error('offline')
+    })
+    expect(await checkRouters(cfg, { from: eth, to: wznn }, as(dead))).toEqual({ sameChain: false, crossChain: false })
   })
 })
 

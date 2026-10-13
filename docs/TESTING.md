@@ -23,7 +23,7 @@ themselves.
 | `signatures.test.ts` | A wrap signed by the mainnet orchestrators recovers to the bridge's TSS key through the app's message layout and `evmSignature` |
 | `referral.test.ts` | Codes equal the original app's; first referral wins; the unwrap suffix is the decoded address |
 | `core.test.ts` | Fees (against a real mainnet wrap), formatting, wrap and unwrap status, revert reasons, affiliate metadata, the plasma bot call, big-integer JSON |
-| `swap.test.ts` | Each router's request and the reading of its answer (shapes recorded 2026-10-13); a quote naming any contract but that router's, or another amount, is refused and not shopped elsewhere; KyberSwap on one chain, Across on two, LI.FI as the fallback; transfer status, time, prices |
+| `swap.test.ts` | Each router's request and the reading of its answer (shapes recorded 2026-10-13); a quote naming any contract but that router's, or another amount, is refused and not shopped elsewhere; KyberSwap on one chain, Across on two, LI.FI as the fallback; router availability; transfer status, time, prices |
 | `errors.test.ts` | Thrown errors as shown: viem's wallet rejection text becomes "Declined in wallet", wallet states name the remedy, a revert shows the contract's reason, anything else is one line of 80 characters |
 | `orchestrators.test.ts` | The health verdict: halted, key generation, stalled (mainnet as read on 2026-10-12), delayed, online, idle |
 
@@ -124,7 +124,8 @@ npm run test:swap
 docker rm -f swap-fork
 ```
 
-It checks the dollar estimates, the unfiltered pickers, a wallet refusal
+It checks the Bridge and Swap modes (what each picker offers, the bridge
+banner hidden in Swap), the dollar estimates, the unfiltered pickers, a wallet refusal
 reading "Declined in wallet", no terms prompt, ETH to wZNN and back through
 KyberSwap with an approve and a custom recipient, and the sending half of ETH
 to BNB through Across. It calls the live router APIs, so it is not part of
