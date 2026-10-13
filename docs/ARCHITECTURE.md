@@ -133,51 +133,97 @@ A redeem simulates first, so bridge.sol's revert reason ("not redeemable yet",
 An EVM asset can go to another EVM asset, on the same chain or on the other
 one, without the bridge: ETH to wZNN, wZNN on Ethereum to BNB, and so on. The
 assets are each chain's coin and the bridge's own tokens there, less pool
-shares. `src/core/swap.ts` asks LI.FI (`li.quest/v1/quote`) for a route; LI.FI
-is the aggregator Jumper and MetaMask's bridge use, it answers a browser with
-no key, and it already routes wZNN. It picks the DEX or the third-party bridge.
-Calling 1inch or Uniswap directly was set aside: 1inch's API needs a key and
-refuses browsers, and a Uniswap router call covers one chain only.
+shares. `src/core/swap.ts` asks a router for one transaction and the wallet
+sends it. Three routers, each answering a browser with no key:
+
+| Swap | Router | Why |
+|---|---|---|
+| One chain | KyberSwap's aggregator | Takes no fee. For wZNN it returns exactly what the Uniswap V2 pool pays |
+| Two chains | Across | Relayers fill in seconds, and it paid the most on every pair tried |
+| Either, as a fallback | LI.FI | Reaches the most tokens, and takes 0.25% for it. Asked only when the first has no route |
+
+Measured on 2026-10-13, amount received, against LI.FI alone (the first
+version of this feature):
+
+| Pair | LI.FI | Now | Gain |
+|---|---|---|---|
+| 0.1 ETH to wZNN, Ethereum | 1564.857 wZNN | 1568.755 wZNN, KyberSwap | 0.25% |
+| 1000 wZNN to ETH, Ethereum | 0.062577 ETH | 0.062733 ETH, KyberSwap | 0.25% |
+| 0.1 ETH to BNB | 0.332674 BNB | 0.335430 BNB, Across | 0.83% |
+| 0.3 BNB to ETH | 0.089149 ETH | 0.089303 ETH, Across | 0.17% |
+| 1000 wZNN, Ethereum, to BNB | 0.208523 BNB | 0.210411 BNB, Across | 0.91% |
+
+Also tried and set aside: Relay (0.1% better than LI.FI on one chain, 11% worse
+on wZNN across two), Symbiosis and deBridge (within 0.03% of Relay on ETH to
+BNB, and deBridge adds a fixed 0.001 ETH), 1inch (its API needs a key and
+refuses browsers), and a direct Uniswap router call (one pool on one chain;
+KyberSwap gives the same price and covers the other tokens).
 
 ```mermaid
 sequenceDiagram
   participant P as Page
+  participant R as Router API
   participant L as LI.FI API
   participant W as EVM wallet
   participant S as Source chain
   participant D as Destination chain
 
-  P->>L: quote (assets, amount, sender, recipient)
-  L-->>P: amount out, minimum, time, transaction
-  Note over P: refused unless the transaction and the approval name LI.FI's router
+  P->>R: quote (assets, amount, sender, recipient)
+  alt has a route
+    R-->>P: amount out, minimum, time, transaction
+  else no route, or unreachable
+    P->>L: quote
+    L-->>P: amount out, minimum, time, transaction
+  end
+  Note over P: refused unless the transaction and the approval name that router's contract
   opt token source, allowance short
-    P->>W: approve router for the amount
+    P->>W: approve the router for the amount
     W->>S: approve
   end
+  Note over P: a quote past its expiry is asked for again first
   P->>W: send the quoted transaction
-  W->>S: swap, or lock for the third-party bridge
+  W->>S: swap, or deposit for the relayer
   alt same chain
     S-->>P: receipt, funds at the recipient
   else two chains
     loop every 6 s, up to 10 min
-      P->>L: status (tx hash)
-      L-->>P: pending, done or failed
+      P->>R: status (tx hash)
+      R-->>P: pending, filled or refunded
     end
     D-->>P: funds at the recipient
   end
 ```
 
-What changes on the page for a swap: Syrius is not asked for, the time shown is
-the quote's (seconds, not the bridge's half hour), the recipient is an EVM
-address and can still be a custom one, the bridge-down block does not apply,
-and the details list the route, the minimum received and the fee in dollars.
+Router API is KyberSwap on one chain and Across on two. Each router's contract
+is one address on both chains, held in `src/config.ts`. A quote is refused
+unless its transaction and its approval name the contract of the router that
+answered, and its value is the amount entered for a coin and zero for a token.
+A quote refused that way is shown; it is not replaced by another router's.
+Approvals are for the amount, not unlimited.
 
-Limits. The quote is asked for when an input settles, not on a timer, because
-the unkeyed API allows 75 per two hours per address. A quote older than a
-minute is asked for again on send, and a worse one is shown before anything is
-signed. A swap is not a bridge request, so Activity does not list it: it is
-followed with toasts in the tab that sent it, and a reload loses that. LI.FI
-takes a fee on every route, shown in the details.
+What changes on the page for a swap: Syrius is not asked for, the bridge's
+terms are not asked for, the time shown is the quote's (seconds, not the
+bridge's half hour), the recipient is an EVM address and can still be a custom
+one, the bridge-down block does not apply, and the details list the route, the
+minimum received and the fee in dollars.
+
+Limits. The quote is asked for when an input settles, not on a timer: the
+routers are unkeyed and rate limited (LI.FI allows 75 quotes per two hours).
+An Across quote is good for about half a minute, so it is usually asked for
+again on send; a worse one is shown before anything is signed. KyberSwap
+refuses a few well-known addresses, anvil's first account among them, and such
+a sender falls back to LI.FI. A swap is not a bridge request, so Activity does
+not list it: it is followed with toasts in the tab that sent it, and a reload
+loses that.
+
+## Prices
+
+Both amounts carry a dollar estimate, and the details list each token's price.
+`fetchPrice` in `src/core/swap.ts` reads LI.FI's token list (`/token`, 100
+lookups a minute unkeyed), kept for five minutes per token. A Zenon token is
+priced by the EVM token the bridge pairs it with: ZNN by wZNN. A token LI.FI
+does not list shows no estimate. Nothing is quoted, limited or sent by these
+numbers.
 
 ## Design
 
@@ -187,6 +233,24 @@ self-hosted Space Grotesk and JetBrains Mono, Lucide icons. Rules from
 word, the plasma gradient once per view on the main action, light and dark, one
 700 px breakpoint, 44 px hit areas, nothing from a CDN, and motion that always
 runs.
+
+The shape is the owner's brief of 2026-10-12, after stargate.finance, and it
+is written down as `webdesign-lab/RULES.md` section 11, "The transfer shape",
+so that a refactor of this app or a new app of the same kind keeps it. In
+short:
+
+- Glass cards (24 px radius, 88% surface, 10 px blur) over a seeded canvas
+  starfield that the pointer lights; controls 14 px, buttons full pills.
+- One 440 px column: a From card and a To card with a round reverse button on
+  the seam, the amount mono at 30 px, a dollar estimate under each.
+- Every token icon carries its chain's badge. A picker row is one asset on one
+  chain; each side has its own picker, with no filters, and a valid default
+  pair is always selected.
+- One main button that says what is missing, then the action. Cost and steps
+  in a collapsed Details list. Rare controls behind Advanced and the wallet
+  menu.
+- Every error goes through `src/core/errors.ts` before it is shown: a few
+  plain words, "Declined in wallet" for any refusal.
 
 ## Decisions
 

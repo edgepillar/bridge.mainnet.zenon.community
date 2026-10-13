@@ -11,6 +11,7 @@
     "typecheck": "vue-tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "vitest run --config e2e/vitest.config.ts",
+    "test:swap": "node e2e/swap.fork.mjs",
     "lab:up": "bash e2e/lab/lab.sh up",
     "lab:down": "bash e2e/lab/lab.sh down",
     "lab:status": "bash e2e/lab/lab.sh status",

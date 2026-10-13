@@ -23,10 +23,11 @@ more). As of 2026-10-12 mainnet is in that last state, with requests waiting
 34 days.
 
 Swaps (ETH, BNB and the bridge's own EVM tokens, on one chain or across the
-two) do not go through the orchestrators. LI.FI's routing API picks a DEX or a
-third-party bridge and the wallet sends one transaction, so a swap settles in
-seconds, needs an EVM wallet only, and keeps working while the bridge is down.
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), Swaps.
+two) do not go through the orchestrators. A router quotes one transaction and
+the wallet sends it: KyberSwap on one chain, Across between the two, LI.FI
+when neither has a route. A swap settles in seconds, needs an EVM wallet only,
+and keeps working while the bridge is down. Amounts carry a dollar estimate.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), Swaps and Prices.
 
 What the original app did, flow by flow, is in
 [docs/FUNCTIONALITY.md](docs/FUNCTIONALITY.md). This rebuild keeps every flow.

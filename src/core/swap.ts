@@ -1,19 +1,25 @@
-// Swaps between EVM assets, on one chain or across two, through LI.FI's
-// routing API (li.quest): the same aggregator Jumper and MetaMask's bridge
-// route through. It picks a DEX for a same-chain swap and a third-party
-// bridge for a cross-chain one, and answers with one transaction for the
-// user's wallet to send.
+// Swaps between EVM assets, on one chain or across two, that do not touch the
+// Zenon bridge or its orchestrators: they keep working, in seconds, while the
+// orchestrators are not signing.
 //
-// None of this touches the Zenon bridge or its orchestrators, which is the
-// point: these routes keep working, in seconds, while the orchestrators are
-// not signing.
+// Three routers, each answering a browser with no key:
 //
-// The API needs no key and sends `access-control-allow-origin: *`, so a
-// static page can call it. Unkeyed it allows 75 quotes per two hours per
-// address, which is why the page asks for a quote when an input changes and
-// not on a timer.
+//   one chain    KyberSwap's aggregator. It takes no fee, and for wZNN it
+//                returns exactly what the Uniswap pool pays.
+//   two chains   Across. Its relayers fill in seconds, and on 2026-10-13 it
+//                paid 0.2% to 0.9% more than LI.FI on every pair tried.
+//   either       LI.FI, asked only when the first has no route. It reaches
+//                the most tokens and takes 0.25% for it.
+//
+// Each answers with one transaction for the user's wallet to send. A quote is
+// refused unless that transaction, and the approval before it, name the
+// router's known contract and carry the amount that was entered: a wrong or
+// tampered answer cannot point an approval at a stranger.
 
 export const NATIVE = '0x0000000000000000000000000000000000000000'
+const KYBER_NATIVE = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE'
+/** What a same-chain swap may lose to price movement before it reverts, in basis points. */
+export const SLIPPAGE_BPS = 50
 
 export interface SwapAsset {
   chainId: number
@@ -23,18 +29,15 @@ export interface SwapAsset {
   decimals: number
 }
 
+export type Provider = 'kyber' | 'across' | 'lifi'
+
 export interface SwapConfig {
-  api: string
-  /**
-   * The contract every transaction and every approval must name. LI.FI
-   * deploys its diamond at one address on every chain; a quote naming any
-   * other is refused, so a wrong or tampered answer cannot point an approval
-   * at a stranger.
-   */
-  spender: string
   chains: number[]
-  /** Where a cross-chain transfer can be followed. */
-  scan: string
+  /** `slugs` are KyberSwap's path names for the chains. */
+  kyber: { api: string; router: string; slugs: Record<number, string> }
+  across: { api: string; router: string }
+  /** `scan` is where a LI.FI transfer can be followed. */
+  lifi: { api: string; router: string; scan: string }
 }
 
 export interface QuoteRequest {
@@ -47,15 +50,20 @@ export interface QuoteRequest {
 
 export interface Quote {
   request: QuoteRequest
-  /** The DEX or bridge the route runs through. */
-  tool: string
+  provider: Provider
+  /** The router, and the DEX or bridge under it where it says. */
+  via: string
+  /** The contract the transaction goes to, and the one a token source approves. */
+  spender: `0x${string}`
   toAmount: bigint
   toAmountMin: bigint
   /** Seconds after the sending transaction confirms. */
   seconds: number
-  feeUsd: number
+  /** What the router and its bridge take, where they say. */
+  feeUsd: number | null
   tx: { to: `0x${string}`; data: `0x${string}`; value: bigint }
-  at: number
+  /** After this the quote is asked for again before it is sent. */
+  expires: number
 }
 
 export type QuoteResult = { ok: true; quote: Quote } | { ok: false; message: string }
@@ -65,7 +73,130 @@ export const sameAsset = (a: SwapAsset | null, b: SwapAsset | null) =>
   !!a && !!b && a.chainId === b.chainId && a.address.toLowerCase() === b.address.toLowerCase()
 export const assetKey = (a: SwapAsset) => `${a.chainId}:${a.address.toLowerCase()}`
 
-export function quoteUrl(c: SwapConfig, q: QuoteRequest): string {
+const big = (v: unknown): bigint | null => {
+  try {
+    return typeof v === 'string' || typeof v === 'number' ? BigInt(v) : null
+  } catch {
+    return null
+  }
+}
+const no = (body: any, fallback = 'No route'): QuoteResult => ({ ok: false, message: typeof body?.message === 'string' ? body.message : fallback })
+
+/** The checks every router's answer passes before it becomes a quote. */
+function guard(q: QuoteRequest, router: string, to: unknown, approval: unknown, value: bigint): string {
+  const r = router.toLowerCase()
+  if (typeof to !== 'string' || to.toLowerCase() !== r) return 'Quote names an unknown contract'
+  if (!isNative(q.from) && String(approval ?? '').toLowerCase() !== r) return 'Quote names an unknown contract'
+  // The value sent is the amount for a native source and nothing otherwise.
+  if (value !== (isNative(q.from) ? q.amount : 0n)) return 'Quote asks for another amount'
+  return ''
+}
+
+// ---- KyberSwap: one chain ----
+
+const kyberToken = (a: SwapAsset) => (isNative(a) ? KYBER_NATIVE : a.address)
+
+export function kyberRouteUrl(c: SwapConfig, q: QuoteRequest): string {
+  const p = new URLSearchParams({ tokenIn: kyberToken(q.from), tokenOut: kyberToken(q.to), amountIn: q.amount.toString() })
+  return `${c.kyber.api}/${c.kyber.slugs[q.from.chainId]}/api/v1/routes?${p}`
+}
+
+/** Reads the built transaction. KyberSwap approves and sends to the same router. */
+export function parseKyber(c: SwapConfig, q: QuoteRequest, body: any, now = Date.now()): QuoteResult {
+  const d = body?.data
+  const toAmount = big(d?.amountOut)
+  if (!d || toAmount === null || typeof d.data !== 'string') return no(body)
+  const value = big(d.transactionValue ?? '0') ?? 0n
+  const bad = guard(q, c.kyber.router, d.routerAddress, d.routerAddress, value)
+  if (bad) return { ok: false, message: bad }
+  return {
+    ok: true,
+    quote: {
+      request: q,
+      provider: 'kyber',
+      via: 'KyberSwap',
+      spender: d.routerAddress,
+      toAmount,
+      toAmountMin: (toAmount * BigInt(10_000 - SLIPPAGE_BPS)) / 10_000n,
+      seconds: 0,
+      feeUsd: null,
+      tx: { to: d.routerAddress, data: d.data, value },
+      expires: now + 60_000,
+    },
+  }
+}
+
+async function quoteKyber(c: SwapConfig, q: QuoteRequest, fetcher: typeof fetch): Promise<QuoteResult> {
+  const headers = { Accept: 'application/json', 'x-client-id': 'zenon-bridge' }
+  const res = await fetcher(kyberRouteUrl(c, q), { headers })
+  const route = await json(res)
+  const summary = route?.data?.routeSummary
+  if (!res.ok || !summary) return no(route)
+  const built = await fetcher(`${c.kyber.api}/${c.kyber.slugs[q.from.chainId]}/api/v1/route/build`, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ routeSummary: summary, sender: q.fromAddress, recipient: q.toAddress, slippageTolerance: SLIPPAGE_BPS }),
+  })
+  const body = await json(built)
+  return built.ok ? parseKyber(c, q, body) : no(body)
+}
+
+// ---- Across: two chains ----
+
+export function acrossUrl(c: SwapConfig, q: QuoteRequest): string {
+  const p = new URLSearchParams({
+    tradeType: 'exactInput',
+    // Lets Across swap into the token it bridges, which is how wZNN and WBTC get a route.
+    strictTradeType: 'false',
+    amount: q.amount.toString(),
+    inputToken: q.from.address,
+    outputToken: q.to.address,
+    originChainId: String(q.from.chainId),
+    destinationChainId: String(q.to.chainId),
+    depositor: q.fromAddress,
+    recipient: q.toAddress,
+  })
+  return `${c.across.api}/swap/approval?${p}`
+}
+
+export function parseAcross(c: SwapConfig, q: QuoteRequest, body: any, now = Date.now()): QuoteResult {
+  const t = body?.swapTx
+  const toAmount = big(body?.expectedOutputAmount)
+  const toAmountMin = big(body?.minOutputAmount)
+  if (!t || toAmount === null || toAmountMin === null || typeof t.data !== 'string') return no(body)
+  // Without strictTradeType the amount taken may differ from the one asked for.
+  if (big(body.inputAmount) !== q.amount) return { ok: false, message: 'Quote asks for another amount' }
+  const bad = guard(q, c.across.router, t.to, body.checks?.allowance?.spender, big(t.value ?? '0') ?? 0n)
+  if (bad) return { ok: false, message: bad }
+  const expiry = Number(body.quoteExpiryTimestamp) * 1000
+  const fee = Number(body.fees?.total?.amountUsd)
+  return {
+    ok: true,
+    quote: {
+      request: q,
+      provider: 'across',
+      via: 'Across',
+      spender: t.to,
+      toAmount,
+      toAmountMin,
+      seconds: Number(body.expectedFillTime) || 0,
+      feeUsd: Number.isFinite(fee) ? fee : null,
+      tx: { to: t.to, data: t.data, value: big(t.value ?? '0') ?? 0n },
+      // Across signs a quote for about half a minute.
+      expires: expiry > now ? expiry - 5_000 : now + 20_000,
+    },
+  }
+}
+
+async function quoteAcross(c: SwapConfig, q: QuoteRequest, fetcher: typeof fetch): Promise<QuoteResult> {
+  const res = await fetcher(acrossUrl(c, q), { headers: { Accept: 'application/json' } })
+  const body = await json(res)
+  return res.ok ? parseAcross(c, q, body) : no(body)
+}
+
+// ---- LI.FI: the fallback ----
+
+export function lifiUrl(c: SwapConfig, q: QuoteRequest): string {
   const p = new URLSearchParams({
     fromChain: String(q.from.chainId),
     toChain: String(q.to.chainId),
@@ -75,78 +206,80 @@ export function quoteUrl(c: SwapConfig, q: QuoteRequest): string {
     fromAddress: q.fromAddress,
     toAddress: q.toAddress,
   })
-  return `${c.api}/quote?${p}`
+  return `${c.lifi.api}/quote?${p}`
 }
 
-const big = (v: unknown): bigint | null => {
+export function parseLifi(c: SwapConfig, q: QuoteRequest, body: any, now = Date.now()): QuoteResult {
+  const e = body?.estimate
+  const t = body?.transactionRequest
+  const toAmount = big(e?.toAmount)
+  const toAmountMin = big(e?.toAmountMin)
+  if (!e || !t || toAmount === null || toAmountMin === null || typeof t.data !== 'string') return no(body)
+  const value = big(t.value ?? '0') ?? 0n
+  const bad = guard(q, c.lifi.router, t.to, e.approvalAddress, value)
+  if (bad) return { ok: false, message: bad }
+  const tool = String(body.toolDetails?.name || body.tool || '')
+  return {
+    ok: true,
+    quote: {
+      request: q,
+      provider: 'lifi',
+      via: tool ? `LI.FI, ${tool}` : 'LI.FI',
+      spender: t.to,
+      toAmount,
+      toAmountMin,
+      seconds: Number(e.executionDuration) || 0,
+      feeUsd: (Array.isArray(e.feeCosts) ? e.feeCosts : []).reduce((s: number, f: any) => s + (Number(f?.amountUSD) || 0), 0),
+      tx: { to: t.to, data: t.data, value },
+      expires: now + 60_000,
+    },
+  }
+}
+
+async function quoteLifi(c: SwapConfig, q: QuoteRequest, fetcher: typeof fetch): Promise<QuoteResult> {
+  const res = await fetcher(lifiUrl(c, q), { headers: { Accept: 'application/json' } })
+  // Unkeyed, LI.FI allows 75 quotes per two hours.
+  if (res.status === 429) return { ok: false, message: 'Too many quotes. Try again later.' }
+  const body = await json(res)
+  if (!res.ok) return res.status === 404 ? { ok: false, message: 'No route' } : no(body, `HTTP ${res.status}`)
+  return parseLifi(c, q, body)
+}
+
+async function json(res: Response): Promise<any> {
   try {
-    return typeof v === 'string' || typeof v === 'number' ? BigInt(v) : null
+    return await res.json()
   } catch {
     return null
   }
 }
 
-/** Reads a quote, refusing one that is incomplete or names another contract. */
-export function parseQuote(c: SwapConfig, request: QuoteRequest, body: any, now = Date.now()): QuoteResult {
-  const e = body?.estimate
-  const t = body?.transactionRequest
-  const toAmount = big(e?.toAmount)
-  const toAmountMin = big(e?.toAmountMin)
-  if (!e || !t || toAmount === null || toAmountMin === null || typeof t.to !== 'string' || typeof t.data !== 'string') {
-    return { ok: false, message: typeof body?.message === 'string' ? body.message : 'No route' }
-  }
-  const spender = c.spender.toLowerCase()
-  if (t.to.toLowerCase() !== spender) return { ok: false, message: 'Quote names an unknown contract' }
-  if (!isNative(request.from) && String(e.approvalAddress ?? '').toLowerCase() !== spender) {
-    return { ok: false, message: 'Quote names an unknown contract' }
-  }
-  const value = big(t.value ?? '0') ?? 0n
-  // The value sent is the amount for a native source and nothing otherwise.
-  if (value !== (isNative(request.from) ? request.amount : 0n)) return { ok: false, message: 'Quote asks for another amount' }
-  const feeUsd = (Array.isArray(e.feeCosts) ? e.feeCosts : []).reduce((s: number, f: any) => s + (Number(f?.amountUSD) || 0), 0)
-  return {
-    ok: true,
-    quote: {
-      request,
-      tool: String(body.toolDetails?.name || body.tool || ''),
-      toAmount,
-      toAmountMin,
-      seconds: Number(e.executionDuration) || 0,
-      feeUsd,
-      tx: { to: t.to as `0x${string}`, data: t.data as `0x${string}`, value },
-      at: now,
-    },
-  }
-}
+const safely = (f: () => Promise<QuoteResult>): Promise<QuoteResult> =>
+  f().catch((err) => ({ ok: false, message: err instanceof Error ? err.message : String(err) }))
 
-export async function fetchQuote(c: SwapConfig, q: QuoteRequest, fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<QuoteResult> {
-  try {
-    const res = await fetcher(quoteUrl(c, q), { headers: { Accept: 'application/json' }, signal })
-    if (res.status === 429) return { ok: false, message: 'Too many quotes. Try again later.' }
-    let body: any = null
-    try {
-      body = await res.json()
-    } catch {
-      /* empty body */
-    }
-    if (!res.ok) return { ok: false, message: res.status === 404 ? 'No route' : typeof body?.message === 'string' ? body.message : `HTTP ${res.status}` }
-    return parseQuote(c, q, body)
-  } catch (err) {
-    return { ok: false, message: err instanceof Error ? err.message : String(err) }
-  }
+/** The cheaper router for the pair first; LI.FI only when that one has no route. */
+export async function fetchQuote(c: SwapConfig, q: QuoteRequest, fetcher: typeof fetch = fetch): Promise<QuoteResult> {
+  const first = q.from.chainId === q.to.chainId ? quoteKyber : quoteAcross
+  const a = await safely(() => first(c, q, fetcher))
+  if (a.ok) return a
+  // An answer that failed a check is not replaced by another router's: it is shown.
+  if (a.message.startsWith('Quote ')) return a
+  return safely(() => quoteLifi(c, q, fetcher))
 }
 
 export type SwapState = 'pending' | 'done' | 'failed'
 
-/** Where a cross-chain transfer stands. An unknown hash is pending: the API learns of it late. */
-export async function fetchStatus(c: SwapConfig, txHash: string, fromChain: number, toChain: number, fetcher: typeof fetch = fetch): Promise<SwapState> {
+/** Where a cross-chain transfer stands. An unknown hash is pending: the routers learn of it late. */
+export async function fetchStatus(c: SwapConfig, provider: Provider, txHash: string, fromChain: number, toChain: number, fetcher: typeof fetch = fetch): Promise<SwapState> {
   try {
-    const res = await fetcher(`${c.api}/status?${new URLSearchParams({ txHash, fromChain: String(fromChain), toChain: String(toChain) })}`, {
-      headers: { Accept: 'application/json' },
-    })
+    const url =
+      provider === 'across'
+        ? `${c.across.api}/deposit/status?${new URLSearchParams({ originChainId: String(fromChain), depositTxnRef: txHash })}`
+        : `${c.lifi.api}/status?${new URLSearchParams({ txHash, fromChain: String(fromChain), toChain: String(toChain) })}`
+    const res = await fetcher(url, { headers: { Accept: 'application/json' } })
     if (!res.ok) return 'pending'
-    const s = (await res.json())?.status
-    return s === 'DONE' ? 'done' : s === 'FAILED' ? 'failed' : 'pending'
+    const s = String((await res.json())?.status ?? '').toLowerCase()
+    if (s === 'done' || s === 'filled') return 'done'
+    return s === 'failed' || s === 'expired' || s === 'refunded' ? 'failed' : 'pending'
   } catch {
     return 'pending'
   }
@@ -154,9 +287,26 @@ export async function fetchStatus(c: SwapConfig, txHash: string, fromChain: numb
 
 /** Time shown before a quote arrives, and added to one for the sending block. */
 export function swapEstimate(from: SwapAsset, to: SwapAsset, sourceBlockSeconds: number, quote: Quote | null): number {
-  const settle = quote ? quote.seconds : from.chainId === to.chainId ? 0 : 60
+  const settle = quote ? quote.seconds : from.chainId === to.chainId ? 0 : 10
   return Math.ceil(sourceBlockSeconds + settle)
 }
 
-/** A quote older than this is asked for again before it is sent. */
-export const QUOTE_TTL_MS = 60_000
+/**
+ * A token's price in dollars, from LI.FI's token list (100 lookups a minute
+ * unkeyed). An estimate for display: nothing is priced or sent by it.
+ */
+export async function fetchPrice(c: SwapConfig, a: SwapAsset, fetcher: typeof fetch = fetch): Promise<number | null> {
+  try {
+    const res = await fetcher(`${c.lifi.api}/token?${new URLSearchParams({ chain: String(a.chainId), token: a.address })}`, { headers: { Accept: 'application/json' } })
+    if (!res.ok) return null
+    const p = Number((await res.json())?.priceUSD)
+    return Number.isFinite(p) && p > 0 ? p : null
+  } catch {
+    return null
+  }
+}
+
+/** Dollars for an amount in base units. Floats are fine here: it is an estimate on screen. */
+export function usdValue(amount: bigint, decimals: number, price: number): number {
+  return (Number(amount) / 10 ** decimals) * price
+}
