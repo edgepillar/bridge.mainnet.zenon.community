@@ -697,10 +697,10 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
     </div>
 
     <!-- From -->
-    <div :key="`from-${mode}`" class="leg mode-in">
+    <div class="leg">
       <button class="asset" data-testid="bridge-from" :disabled="!bridge.loaded" @click="openPicker('from')">
-        <TokenIcon :symbol="srcSymbol" :chain="srcNet" :size="44" />
-        <span class="grid min-w-0 flex-1 text-left">
+        <TokenIcon :key="`i-${srcSymbol}-${srcNet}`" class="val-in" :symbol="srcSymbol" :chain="srcNet" :size="44" />
+        <span :key="`t-${srcSymbol}-${srcNet}`" class="val-in grid min-w-0 flex-1 text-left">
           <span class="text-lg leading-tight font-semibold">{{ srcSymbol || 'From' }}</span>
           <span class="text-sm text-dim">{{ srcNet }}</span>
         </span>
@@ -722,10 +722,10 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
     </div>
 
     <!-- To -->
-    <div :key="`to-${mode}`" class="leg mode-in mode-in-late">
+    <div class="leg">
       <button class="asset" data-testid="bridge-to" :disabled="!bridge.loaded" @click="openPicker('to')">
-        <TokenIcon :symbol="dstSymbol" :chain="dstNet" :size="44" />
-        <span class="grid min-w-0 flex-1 text-left">
+        <TokenIcon :key="`i-${dstSymbol}-${dstNet}`" class="val-in" :symbol="dstSymbol" :chain="dstNet" :size="44" />
+        <span :key="`t-${dstSymbol}-${dstNet}`" class="val-in grid min-w-0 flex-1 text-left">
           <span class="text-lg leading-tight font-semibold">{{ dstSymbol || 'To' }}</span>
           <span class="text-sm text-dim">{{ dstNet }}</span>
         </span>
@@ -918,19 +918,16 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
 .seg button:active {
   transform: scale(0.97);
 }
-/* The cards follow the thumb: each settles in again for the new mode, the
-   second a beat after the first. */
-@keyframes mode-in {
+/* The form stays where it is when the mode or an asset changes. Only what
+   changed is replaced: the new token and its name fade in, in place. */
+@keyframes val-in {
   from {
     opacity: 0;
-    transform: translateY(8px) scale(0.985);
+    transform: translateY(3px);
   }
 }
-.mode-in {
-  animation: mode-in 420ms var(--spring) both;
-}
-.mode-in-late {
-  animation-delay: 60ms;
+.val-in {
+  animation: val-in 260ms var(--ease) both;
 }
 .adv {
   position: relative;

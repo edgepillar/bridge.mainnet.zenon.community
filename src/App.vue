@@ -38,6 +38,12 @@ watch(
   },
 )
 const noticeHidden = ref(false)
+// Closing the bridge banner holds until the bridge's state changes or the page is loaded again. The chip in the header stays.
+const downHidden = ref(false)
+watch(
+  () => bridge.health?.state,
+  () => (downHidden.value = false),
+)
 watch(
   () => node.notice,
   () => (noticeHidden.value = false),
@@ -110,7 +116,7 @@ const status = computed(() => {
       <Banner v-if="swapping && swapMessage" tone="danger">
         <strong>Swaps are unavailable.</strong> {{ swapMessage }}
       </Banner>
-      <Banner v-if="(downMessage || bridge.health?.state === 'down') && route !== 'stats' && !swapping" tone="danger">
+      <Banner v-if="(downMessage || bridge.health?.state === 'down') && route !== 'stats' && !swapping && !downHidden" tone="danger" dismissable @dismiss="downHidden = true">
         <strong>{{ networkLabel() }} bridge is down.</strong> {{ downMessage }}
         <template #action><a href="#/stats" class="btn btn-ghost btn-sm -my-1 !text-inherit">Status</a></template>
       </Banner>
