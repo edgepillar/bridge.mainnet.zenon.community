@@ -43,7 +43,7 @@ watch(
 )
 const downMessage = computed(() => {
   // Stalled: the banner says what it means for the user; Stats has the detail.
-  if (bridge.health?.state === 'down') return config.swap ? 'New transfers will wait too. Swaps still work.' : 'New transfers will wait too.'
+  if (bridge.health?.state === 'down') return config.swap ? 'Swaps still work.' : ''
   if (bridge.health?.message && bridgeDown()) return bridge.health.message
   if (bridge.info?.halted) return 'The bridge is halted. Transfers are paused.'
   if (bridge.info?.allowKeyGen) return 'Orchestrators are generating a new key. Transfers wait until it is done.'
