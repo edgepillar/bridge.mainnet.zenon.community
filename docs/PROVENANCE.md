@@ -1,5 +1,11 @@
 # Source provenance and licensing decisions
 
+The [locked dependency notice inventory](DEPENDENCY_LICENSES.json) records installed
+package versions, declared license fields and notice-file digests without author or
+machine metadata. It is a review input for the [acceptance protocol](ACCEPTANCE.md),
+not a bundle composition claim, replacement notice or grant of root licensing
+authority. Preserve the actual applicable notice texts in an accepted distribution.
+
 The application contains reconstructed bridge functionality and reused Zenon primitives/ABI/block and wallet adapter code. The existing headers identify origins including `zenon-ptlc/lab/web`, the earlier bridge deployment, `zenon-faucet`, the Syrius adapter, go-zenon consensus code and the HyperCore orchestrator message layouts. Those descriptions are provenance leads, not a grant of authority over missing source or a root license.
 
 `e2e/contracts/Bridge.sol` matches HyperCore-Team/evm-bridge-contracts at `db346b0` apart from provenance comments; its SPDX marker is MIT. It is a lab contract fixture. Matching source does not establish that every deployed contract's bytecode/configuration is identical. OpenZeppelin is an npm dependency pinned by the lockfile. Public fixture mnemonics/accounts are test material and must never be funded on other networks.

@@ -1,5 +1,8 @@
 # Qualification boundaries
 
+Use the [remaining acceptance protocol](ACCEPTANCE.md) to collect owner, real-wallet,
+hosting and economic integration evidence without treating fixtures as acceptance.
+
 `npm ci`, `npm run lint`, `npm run test:coverage`, `npm audit --audit-level=low`, `npm run build` and `CHROME_PATH=... npm run test:browser` qualify the local source. Coverage thresholds are 80% statements/functions/lines and 70% branches for the selected core parsers, RPC and operation/reconciliation code. State ownership and fixture orchestration have separate deterministic regressions; dialog behavior is qualified in Chromium. Coverage is not a security proof and the reported percentage is not whole-application coverage.
 
 The browser suite uses the actual Vue components with offline provider/RPC fixtures and blocks outbound requests. It tests five views in both themes at 320/375/768/1024/1440 pixels with connected and disconnected wallets, invalid recipients/amounts, unknown health, original late results, queued economic changes, reverted receipts, actual cross-tab ownership, redirect policy and nested dialog keyboard/focus behavior. Pool/stake fixtures cover identity, approval/revert, LP postconditions, zero/halted/unavailable programs, pagination, expiry and submitted-only status. Browser and result artifacts are recorded. It does not qualify a real extension, actual DEX/LP minting, economic reward cycle or complete LP bridge lifecycle.
