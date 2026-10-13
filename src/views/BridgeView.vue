@@ -6,7 +6,7 @@
 // approve, if the allowance is short, then `unwrap` on the EVM bridge; the
 // Zenon redeem happens later, from Activity.
 import { computed, ref, watch } from 'vue'
-import { ArrowDownUp, ArrowRight, ChevronDown, Clock, Fuel, Gift, Plus, Loader2, SlidersHorizontal, Zap } from 'lucide-vue-next'
+import { ArrowDownUp, ChevronDown, Clock, Fuel, Gift, Plus, Loader2, SlidersHorizontal, Zap } from 'lucide-vue-next'
 import TokenIcon from '../components/TokenIcon.vue'
 import Amount from '../components/Amount.vue'
 import Modal from '../components/Modal.vue'
@@ -37,7 +37,8 @@ const routeKey = ref<string>('')
 const amountText = ref('')
 const recipientText = ref('')
 const editingRecipient = ref(false)
-const picker = ref(false)
+const picker = ref<'from' | 'to' | null>(null)
+const pickerNet = ref<number | 'zenon'>('zenon')
 const advanced = ref(false)
 const details = ref(false)
 const termsOpen = ref(false)
@@ -82,6 +83,66 @@ watch(
   { immediate: true },
 )
 const route = computed<Route | undefined>(() => routes.value.find((r) => r.key === routeKey.value))
+
+// Each side is picked on its own. An option is one asset on one chain; the
+// route it stands for is what choosing it selects. The first route stays the
+// default pair, so the form is never empty.
+interface Option {
+  id: string
+  symbol: string
+  network: string
+  route: Route
+  dir: Dir
+  active: boolean
+}
+const zenonSources = computed<Option[]>(() => {
+  const seen = new Set<string>()
+  const out: Option[] = []
+  for (const r of bridge.routes) {
+    if (!r.canWrap || seen.has(r.pair.tokenStandard)) continue
+    seen.add(r.pair.tokenStandard)
+    // Stay on the chosen chain when it carries this token.
+    const same = bridge.routes.find((x) => x.canWrap && x.pair.tokenStandard === r.pair.tokenStandard && x.chainId === chainId.value)
+    out.push({
+      id: r.pair.tokenStandard,
+      symbol: r.zts?.symbol ?? '',
+      network: 'Zenon',
+      route: same ?? r,
+      dir: 'wrap',
+      active: dir.value === 'wrap' && route.value?.pair.tokenStandard === r.pair.tokenStandard,
+    })
+  }
+  return out
+})
+const sourceNets = computed<(number | 'zenon')[]>(() => [
+  ...(zenonSources.value.length ? (['zenon'] as const) : []),
+  ...new Set(bridge.routes.filter((r) => r.canUnwrap).map((r) => r.chainId)),
+])
+const options = computed<Option[]>(() => {
+  if (picker.value === 'from') {
+    if (pickerNet.value === 'zenon') return zenonSources.value
+    return bridge.routes
+      .filter((r) => r.canUnwrap && r.chainId === pickerNet.value)
+      .map((r) => ({ id: r.key, symbol: r.evm?.symbol ?? '', network: r.networkName, route: r, dir: 'unwrap' as Dir, active: dir.value === 'unwrap' && r.key === routeKey.value }))
+  }
+  const cur = route.value
+  if (!cur) return []
+  // Where the chosen source can go: one chain per route for a Zenon token, Zenon alone for an EVM one.
+  if (dir.value === 'unwrap') return [{ id: cur.key, symbol: cur.zts?.symbol ?? '', network: 'Zenon', route: cur, dir: 'unwrap', active: true }]
+  return bridge.routes
+    .filter((r) => r.canWrap && r.pair.tokenStandard === cur.pair.tokenStandard)
+    .map((r) => ({ id: r.key, symbol: r.evm?.symbol ?? '', network: r.networkName, route: r, dir: 'wrap' as Dir, active: r.key === routeKey.value }))
+})
+function openPicker(side: 'from' | 'to') {
+  pickerNet.value = dir.value === 'wrap' ? 'zenon' : (chainId.value ?? 'zenon')
+  picker.value = side
+}
+function pick(o: Option) {
+  dir.value = o.dir
+  chainId.value = o.route.chainId
+  routeKey.value = o.route.key
+  picker.value = null
+}
 const net = computed(() => (chainId.value ? evmChain(chainId.value) : null))
 const evmNet = computed(() => (chainId.value ? bridge.evmNetworks[chainId.value] : undefined))
 
@@ -385,7 +446,7 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
 
     <!-- From -->
     <div class="leg">
-      <button class="asset" :disabled="!bridge.loaded" @click="picker = true">
+      <button class="asset" data-testid="bridge-from" :disabled="!bridge.loaded" @click="openPicker('from')">
         <TokenIcon :symbol="srcSymbol" :chain="srcNet" :size="44" />
         <span class="grid min-w-0 flex-1 text-left">
           <span class="text-lg leading-tight font-semibold">{{ srcSymbol || 'From' }}</span>
@@ -409,7 +470,7 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
 
     <!-- To -->
     <div class="leg">
-      <button class="asset" :disabled="!bridge.loaded" @click="picker = true">
+      <button class="asset" data-testid="bridge-to" :disabled="!bridge.loaded" @click="openPicker('to')">
         <TokenIcon :symbol="dstSymbol" :chain="dstNet" :size="44" />
         <span class="grid min-w-0 flex-1 text-left">
           <span class="text-lg leading-tight font-semibold">{{ dstSymbol || 'To' }}</span>
@@ -477,29 +538,22 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
       </dl>
     </div>
 
-    <!-- Asset: the network and the token, in one place. -->
-    <Modal :open="picker" title="Select asset" @close="picker = false">
-      <div v-if="chains.length > 1" class="mb-3 flex flex-wrap gap-2">
-        <button v-for="id in chains" :key="id" class="net-pill" :class="{ active: id === chainId }" @click="chainId = id">
-          <TokenIcon :network="evmChain(id).name" :size="20" />{{ evmChain(id).name }}
+    <!-- One side at a time: the source from every chain, then where it can go. -->
+    <Modal :open="picker !== null" :title="picker === 'to' ? 'To' : 'From'" @close="picker = null">
+      <div v-if="picker === 'from' && sourceNets.length > 1" class="mb-3 flex flex-wrap gap-2">
+        <button v-for="id in sourceNets" :key="id" class="net-pill" :class="{ active: id === pickerNet }" @click="pickerNet = id">
+          <TokenIcon :network="id === 'zenon' ? 'Zenon' : evmChain(id).name" :size="20" />{{ id === 'zenon' ? 'Zenon' : evmChain(id).name }}
         </button>
       </div>
       <div class="grid gap-1">
-        <button v-for="r in routes" :key="r.key" class="pick-row" :class="{ active: r.key === routeKey }" @click="((routeKey = r.key), (picker = false))">
-          <TokenIcon :symbol="dir === 'wrap' ? r.zts?.symbol : r.evm?.symbol" :chain="dir === 'wrap' ? 'Zenon' : r.networkName" :size="36" />
+        <button v-for="o in options" :key="o.id" data-testid="bridge-option" class="pick-row" :class="{ active: o.active }" @click="pick(o)">
+          <TokenIcon :symbol="o.symbol" :chain="o.network" :size="36" />
           <span class="grid text-left">
-            <span class="font-medium">{{ dir === 'wrap' ? r.zts?.symbol : r.evm?.symbol }}</span>
-            <span class="text-xs text-dim">{{ dir === 'wrap' ? 'Zenon' : r.networkName }}</span>
+            <span class="font-medium">{{ o.symbol }}</span>
+            <span class="text-xs text-dim">{{ o.network }}</span>
           </span>
-          <ArrowRight :size="14" class="mx-1 text-dim" />
-          <TokenIcon :symbol="dir === 'wrap' ? r.evm?.symbol : r.zts?.symbol" :chain="dir === 'wrap' ? r.networkName : 'Zenon'" :size="36" />
-          <span class="grid text-left">
-            <span class="font-medium">{{ dir === 'wrap' ? r.evm?.symbol : r.zts?.symbol }}</span>
-            <span class="text-xs text-dim">{{ dir === 'wrap' ? r.networkName : 'Zenon' }}</span>
-          </span>
-          <span v-if="dir === 'wrap' && r.pair.feePercentage" class="ml-auto text-xs text-dim">{{ r.pair.feePercentage / 100 }}%</span>
         </button>
-        <p v-if="!routes.length" class="text-soft">None yet</p>
+        <p v-if="!options.length" class="text-soft">None yet</p>
       </div>
     </Modal>
 
