@@ -681,7 +681,8 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
 <template>
   <section class="rise mx-auto grid max-w-[440px] grid-cols-1 gap-2">
     <div v-if="config.swap" class="flex justify-center">
-      <div class="seg" role="tablist">
+      <div class="seg" role="tablist" :class="{ swap: mode === 'swap' }">
+        <span class="seg-thumb" aria-hidden="true" />
         <button role="tab" data-testid="mode-bridge" :aria-selected="mode === 'bridge'" :class="{ active: mode === 'bridge' }" @click="setMode('bridge')">Bridge</button>
         <button role="tab" data-testid="mode-swap" :aria-selected="mode === 'swap'" :class="{ active: mode === 'swap' }" :disabled="!bridge.loaded" @click="setMode('swap')">Swap</button>
       </div>
@@ -696,7 +697,7 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
     </div>
 
     <!-- From -->
-    <div class="leg">
+    <div :key="`from-${mode}`" class="leg mode-in">
       <button class="asset" data-testid="bridge-from" :disabled="!bridge.loaded" @click="openPicker('from')">
         <TokenIcon :symbol="srcSymbol" :chain="srcNet" :size="44" />
         <span class="grid min-w-0 flex-1 text-left">
@@ -721,7 +722,7 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
     </div>
 
     <!-- To -->
-    <div class="leg">
+    <div :key="`to-${mode}`" class="leg mode-in mode-in-late">
       <button class="asset" data-testid="bridge-to" :disabled="!bridge.loaded" @click="openPicker('to')">
         <TokenIcon :symbol="dstSymbol" :chain="dstNet" :size="44" />
         <span class="grid min-w-0 flex-1 text-left">
@@ -873,33 +874,63 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
 </template>
 
 <style scoped>
+/* The mode toggle: one thumb slides between two equal halves, and the labels
+   change colour as it passes. */
 .seg {
-  display: inline-flex;
-  gap: 4px;
+  position: relative;
+  display: inline-grid;
+  grid-template-columns: 1fr 1fr;
   padding: 4px;
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--card-glass);
   backdrop-filter: blur(10px);
 }
+.seg-thumb {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 4px;
+  width: calc(50% - 4px);
+  border-radius: 999px;
+  background: var(--raised);
+  box-shadow: var(--edge), var(--shadow-panel);
+  transition: transform 360ms cubic-bezier(0.65, 0, 0.35, 1);
+}
+.seg.swap .seg-thumb {
+  transform: translateX(100%);
+}
 .seg button {
+  position: relative;
   min-height: 44px;
+  min-width: 96px;
   padding: 0 22px;
   border-radius: 999px;
   color: var(--dim);
   font-size: 15px;
   font-weight: 500;
-  transition:
-    background 180ms var(--ease),
-    color 180ms var(--ease);
+  transition: color 240ms var(--ease);
 }
-.seg button:hover {
-  color: var(--fg);
-}
+.seg button:hover,
 .seg button.active {
-  background: var(--raised);
   color: var(--fg);
-  box-shadow: var(--edge);
+}
+.seg button:active {
+  transform: scale(0.97);
+}
+/* The cards follow the thumb: each settles in again for the new mode, the
+   second a beat after the first. */
+@keyframes mode-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+}
+.mode-in {
+  animation: mode-in 420ms var(--spring) both;
+}
+.mode-in-late {
+  animation-delay: 60ms;
 }
 .adv {
   position: relative;
