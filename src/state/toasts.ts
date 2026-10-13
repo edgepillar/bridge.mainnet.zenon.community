@@ -1,5 +1,6 @@
 import { reactive } from 'vue'
 import type { Tone } from '../core/status.ts'
+import { userMessage } from '../core/errors.ts'
 
 export interface Toast {
   id: number
@@ -24,7 +25,7 @@ export function dismiss(id: number): void {
 }
 
 export function toastError(err: unknown, prefix = ''): void {
-  const e = err as { declined?: boolean; message?: string }
-  if (e?.declined) return toast('Declined in wallet', 'dim')
-  toast(`${prefix}${e?.message ?? String(err)}`, 'danger', undefined, 8000)
+  const m = userMessage(err)
+  if (m.declined) return toast(m.text, 'dim')
+  toast(`${prefix}${m.text}`, 'danger', undefined, 8000)
 }

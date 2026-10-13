@@ -15,6 +15,7 @@ import { bridge, bridgeDown, nodeContext, routeByZts } from '../state/bridge.ts'
 import { evm, ensureChain } from '../state/evm.ts'
 import { syrius, sendBlock, connectSyrius } from '../state/zenon.ts'
 import { toast, toastError } from '../state/toasts.ts'
+import { userMessage } from '../core/errors.ts'
 import { readClient, writeClient } from '../evm/client.ts'
 import { bridgeAbi } from '../evm/abi.ts'
 import { redeemBlock } from '../znn/api.ts'
@@ -87,8 +88,9 @@ async function redeemWrap(i: Item) {
       await reader.simulateContract({ address: contract, abi: bridgeAbi, functionName: 'redeem', args, account })
     } catch (err) {
       const msg = (err as Error).message
+      const shown = userMessage(err)
       const state = wrapStateFromRevert(msg)
-      toast(state === 'done' ? 'Already redeemed' : state === 'delay' ? 'Not redeemable yet' : msg.split('\n')[0], state === 'done' ? 'ok' : 'warn')
+      toast(state === 'done' ? 'Already redeemed' : state === 'delay' ? 'Not redeemable yet' : shown.text, state === 'done' ? 'ok' : shown.declined ? 'dim' : 'warn')
       return void (await refreshActivity())
     }
     guard()

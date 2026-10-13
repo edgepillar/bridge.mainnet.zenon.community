@@ -5,8 +5,16 @@
 // redeem happens later, from Activity. Unwrap (EVM to Zenon) is an ERC-20
 // approve, if the allowance is short, then `unwrap` on the EVM bridge; the
 // Zenon redeem happens later, from Activity.
+//
+// Swap (EVM to EVM, one chain or two) does not use the bridge at all: a
+// router quotes a route through a DEX or a third-party bridge and the wallet
+// sends one transaction (src/core/swap.ts). It needs an EVM wallet only, and
+// it works while the orchestrators are not signing.
+//
+// A toggle at the top picks which of the two the form does. Bridge, the
+// default, offers only Zenon to EVM and back; Swap offers only EVM assets.
 import { computed, onUnmounted, ref, watch } from 'vue'
-import { ArrowDownUp, ArrowRight, ChevronDown, Clock, Fuel, Gift, Plus, Loader2, SlidersHorizontal, Zap } from '@lucide/vue'
+import { ArrowDownUp, ChevronDown, Clock, Fuel, Gift, Plus, Loader2, SlidersHorizontal, Zap } from '@lucide/vue'
 import TokenIcon from '../components/TokenIcon.vue'
 import Amount from '../components/Amount.vue'
 import Modal from '../components/Modal.vue'
@@ -18,6 +26,7 @@ import { referrer } from '../state/referral.ts'
 import { remember } from '../state/activity.ts'
 import { accepted } from '../state/ack.ts'
 import { go, bridgePrefill } from '../state/router.ts'
+import { mode, checkSwap, type Mode } from '../state/swap.ts'
 import { toast, toastError } from '../state/toasts.ts'
 import { readClient, writeClient } from '../evm/client.ts'
 import { bridgeAbi, erc20Abi } from '../evm/abi.ts'
@@ -26,23 +35,26 @@ import { isUserAddress } from '../znn/primitives.ts'
 import { isEvmRecipient } from '../core/recipient.ts'
 import { operations, unresolvedOperation } from '../state/operations.ts'
 import { submitTransaction, successfulReceipt, transactionPayload } from '../evm/transactions.ts'
-import { parseUnits, unitsToInput, duration, formatUnits, shorten } from '../core/format.ts'
+import { parseUnits, unitsToInput, duration, formatUnits, formatUsd, shorten } from '../core/format.ts'
 import { wrapFee, wrapReceive, unwrapReceive, wrapEstimate, unwrapEstimate, LOW_PLASMA } from '../core/fees.ts'
 import { usableReferrer, recipientString } from '../core/referral.ts'
 import { requestPlasma, canRequest } from '../core/plasmaBot.ts'
+import { NATIVE, assetKey, fetchPrice, fetchQuote, fetchStatus, isNative, sameAsset, swapEstimate, usdValue, type Provider, type Quote, type SwapAsset } from '../core/swap.ts'
 import { watchAsset } from '../wallet/eip6963.ts'
 import { config, evmChain, evmTxUrl } from '../config.ts'
 
-type Dir = 'wrap' | 'unwrap'
+type Dir = 'wrap' | 'unwrap' | 'swap'
 const dir = ref<Dir>('wrap')
 let mounted = true
-onUnmounted(() => { mounted = false; balanceRequest++; recipientRequest++ })
+onUnmounted(() => { mounted = false; balanceRequest++; recipientRequest++; quoteSeq++; clearTimeout(quoteTimer) })
 const chainId = ref<number | null>(null)
 const routeKey = ref<string>('')
+const swapFrom = ref<SwapAsset | null>(null)
+const swapTo = ref<SwapAsset | null>(null)
 const amountText = ref('')
 const recipientText = ref('')
 const editingRecipient = ref(false)
-const picker = ref(false)
+const picker = ref<'from' | 'to' | null>(null)
 const advanced = ref(false)
 const details = ref(false)
 const termsOpen = ref(false)
@@ -86,25 +98,165 @@ watch(
   { immediate: true },
 )
 const route = computed<Route | undefined>(() => routes.value.find((r) => r.key === routeKey.value))
+
+// What the router can swap: the bridge's own tokens on each chain, and the chain's coin.
+const swapAssets = computed<SwapAsset[]>(() => {
+  const out: SwapAsset[] = []
+  for (const id of config.swap?.chains ?? []) {
+    const c = config.evm[id]
+    if (!c) continue
+    for (const r of bridge.routes) {
+      if (r.chainId !== id || !r.evm) continue
+      // A pool share has no market to route through.
+      if (r.pair.tokenAddress.toLowerCase() === c.liquidity?.pair.toLowerCase() || /LP$|-V2$/i.test(r.evm.symbol)) continue
+      out.push({ chainId: id, address: r.pair.tokenAddress, symbol: r.evm.symbol, decimals: r.evm.decimals })
+    }
+    out.push({ chainId: id, address: NATIVE, symbol: c.nativeSymbol, decimals: 18 })
+  }
+  return out
+})
+function setBridge(d: 'wrap' | 'unwrap', r: Route) {
+  dir.value = d
+  chainId.value = r.chainId
+  routeKey.value = r.key
+}
+function setSwap(from: SwapAsset, to: SwapAsset) {
+  swapFrom.value = from
+  swapTo.value = to
+  chainId.value = from.chainId
+  dir.value = 'swap'
+}
+/** Where a new source goes first: the destination already chosen, or the first other asset on its chain. */
+function defaultSwapTarget(from: SwapAsset): SwapAsset | undefined {
+  if (swapTo.value && !sameAsset(swapTo.value, from)) return swapTo.value
+  return swapAssets.value.find((a) => a.chainId === from.chainId && !sameAsset(a, from)) ?? swapAssets.value.find((a) => !sameAsset(a, from))
+}
+
+// Each side is picked on its own. An option is one asset on one chain;
+// choosing it sets the transfer. The first route stays the default pair, so
+// the form is never empty.
+interface Option {
+  id: string
+  symbol: string
+  network: string
+  active: boolean
+  apply: () => void
+}
+const zenonSources = computed<Option[]>(() => {
+  const seen = new Set<string>()
+  const out: Option[] = []
+  for (const r of bridge.routes) {
+    if (!r.canWrap || seen.has(r.pair.tokenStandard)) continue
+    seen.add(r.pair.tokenStandard)
+    // Stay on the chosen chain when it carries this token.
+    const same = bridge.routes.find((x) => x.canWrap && x.pair.tokenStandard === r.pair.tokenStandard && x.chainId === chainId.value)
+    out.push({
+      id: r.pair.tokenStandard,
+      symbol: r.zts?.symbol ?? '',
+      network: 'Zenon',
+      active: dir.value === 'wrap' && route.value?.pair.tokenStandard === r.pair.tokenStandard,
+      apply: () => setBridge('wrap', same ?? r),
+    })
+  }
+  return out
+})
+const unwrapSources = computed<Option[]>(() =>
+  bridge.routes
+    .filter((r) => r.canUnwrap)
+    .map((r) => ({
+      id: r.key,
+      symbol: r.evm?.symbol ?? '',
+      network: r.networkName,
+      active: dir.value === 'unwrap' && r.key === routeKey.value,
+      apply: () => setBridge('unwrap', r),
+    })),
+)
+const swapSources = computed<Option[]>(() => {
+  const out: Option[] = []
+  for (const a of swapAssets.value) {
+    const to = defaultSwapTarget(a)
+    if (to) out.push({ id: assetKey(a), symbol: a.symbol, network: evmChain(a.chainId).name, active: sameAsset(swapFrom.value, a), apply: () => setSwap(a, to) })
+  }
+  return out
+})
+// There are few enough assets that each side lists all it can take, with no filter.
+const options = computed<Option[]>(() => {
+  if (dir.value === 'swap') {
+    if (picker.value === 'from') return swapSources.value
+    const src = swapFrom.value
+    return swapAssets.value
+      .filter((a) => !sameAsset(a, src))
+      .map((a) => ({ id: assetKey(a), symbol: a.symbol, network: evmChain(a.chainId).name, active: sameAsset(swapTo.value, a), apply: () => src && setSwap(src, a) }))
+  }
+  if (picker.value === 'from') return [...zenonSources.value, ...unwrapSources.value]
+  const cur = route.value
+  if (!cur) return []
+  // A token crosses to its own counterpart only: one chain per route from Zenon, Zenon alone from an EVM chain.
+  if (dir.value === 'unwrap') return [{ id: cur.key, symbol: cur.zts?.symbol ?? '', network: 'Zenon', active: true, apply: () => setBridge('unwrap', cur) }]
+  return bridge.routes
+    .filter((r) => r.canWrap && r.pair.tokenStandard === cur.pair.tokenStandard)
+    .map((r) => ({ id: r.key, symbol: r.evm?.symbol ?? '', network: r.networkName, active: r.key === routeKey.value, apply: () => setBridge('wrap', r) }))
+})
+
+// The toggle. Each mode comes back to what it last showed.
+let lastBridge: { dir: 'wrap' | 'unwrap'; key: string } | null = null
+function setMode(m: Mode) {
+  if (busy.value) return
+  if (m === mode.value) return
+  if (m === 'swap') {
+    if (dir.value !== 'swap' && route.value) lastBridge = { dir: dir.value, key: route.value.key }
+    const from = swapFrom.value ?? swapAssets.value.find(isNative)
+    const to = from && (swapTo.value ?? defaultSwapTarget(from))
+    if (from && to) setSwap(from, to)
+    return
+  }
+  const r = lastBridge && bridge.routes.find((x) => x.key === lastBridge!.key)
+  if (r) setBridge(lastBridge!.dir, r)
+  else dir.value = 'wrap'
+}
+watch(
+  dir,
+  (d) => {
+    mode.value = d === 'swap' ? 'swap' : 'bridge'
+    if (d !== 'swap') return
+    const from = swapAssets.value.find(isNative)
+    const to = from && swapAssets.value.find((a) => a.chainId === from.chainId && !isNative(a))
+    void checkSwap(from && to ? { from, to } : null)
+  },
+  { immediate: true },
+)
+function openPicker(side: 'from' | 'to') {
+  picker.value = side
+}
+function pick(o: Option) {
+  if (busy.value) return
+  o.apply()
+  picker.value = null
+}
 const net = computed(() => (chainId.value ? evmChain(chainId.value) : null))
 const evmNet = computed(() => (chainId.value ? bridge.evmNetworks[chainId.value] : undefined))
 
 // What the user holds on the sending side, and the token's units there.
-const srcSymbol = computed(() => (dir.value === 'wrap' ? route.value?.zts?.symbol : route.value?.evm?.symbol) ?? '')
-const dstSymbol = computed(() => (dir.value === 'wrap' ? route.value?.evm?.symbol : route.value?.zts?.symbol) ?? '')
+const srcSymbol = computed(() => (dir.value === 'swap' ? swapFrom.value?.symbol : dir.value === 'wrap' ? route.value?.zts?.symbol : route.value?.evm?.symbol) ?? '')
+const dstSymbol = computed(() => (dir.value === 'swap' ? swapTo.value?.symbol : dir.value === 'wrap' ? route.value?.evm?.symbol : route.value?.zts?.symbol) ?? '')
 // Every asset is shown with the chain it is on.
 const srcNet = computed(() => (dir.value === 'wrap' ? 'Zenon' : (net.value?.name ?? '')))
-const dstNet = computed(() => (dir.value === 'wrap' ? (net.value?.name ?? '') : 'Zenon'))
-const decimals = computed(() => (dir.value === 'wrap' ? route.value?.zts?.decimals : route.value?.evm?.decimals) ?? 8)
+const dstNet = computed(() => (dir.value === 'swap' ? (swapTo.value ? evmChain(swapTo.value.chainId).name : '') : dir.value === 'wrap' ? (net.value?.name ?? '') : 'Zenon'))
+const decimals = computed(() => (dir.value === 'swap' ? swapFrom.value?.decimals : dir.value === 'wrap' ? route.value?.zts?.decimals : route.value?.evm?.decimals) ?? 8)
+// The bridge keeps a token's units on both sides; a swap does not.
+const dstDecimals = computed(() => (dir.value === 'swap' ? (swapTo.value?.decimals ?? 18) : decimals.value))
 
+const quote = ref<Quote | null>(null)
+const quoteError = ref('')
 const balance = ref<bigint | null>(null)
 const allowance = ref<bigint | null>(null)
 const plasma = ref<number | null>(null)
 const recipientPlasma = ref<number | null>(null)
 
 let balanceRequest = 0
-const balanceContext = () => JSON.stringify([nodeContext(), route.value?.key, dir.value, syrius.address, evm.account, evm.chainId, evm.selected?.info.uuid])
+const balanceContext = () => JSON.stringify([nodeContext(), route.value?.key, dir.value, swapFrom.value, quote.value?.spender, syrius.address, evm.account, evm.chainId, evm.selected?.info.uuid])
 async function refreshBalances() {
+  if (dir.value === 'swap') return refreshSwapBalance()
   const request = ++balanceRequest, key = balanceContext(), r = route.value, a = api.value
   const current = () => request === balanceRequest && key === balanceContext() && a === api.value
   balance.value = null; allowance.value = null; plasma.value = null
@@ -127,14 +279,39 @@ async function refreshBalances() {
     }
   } catch { /* unknown balances never authorize a send */ }
 }
-watch([route, dir, () => api.value, () => node.epoch, () => syrius.address, () => evm.account, () => evm.chainId, () => evm.selected], refreshBalances, { immediate: true, flush: 'sync' })
+async function refreshSwapBalance() {
+  const request = ++balanceRequest, key = balanceContext(), a = swapFrom.value, account = evm.account, provider = evm.selected?.provider
+  const current = () => mounted && request === balanceRequest && key === balanceContext() && provider === evm.selected?.provider
+  balance.value = null; allowance.value = null
+  if (!a || !account || !config.swap || evm.chainId !== a.chainId) return
+  try {
+    const c = readClient(a.chainId, walletForReads())
+    if (await c.getChainId() !== a.chainId) return
+    if (isNative(a)) {
+      const result = await c.getBalance({ address: account })
+      if (current()) balance.value = result
+      return
+    }
+    const token = a.address as `0x${string}`
+    // Which router is approved depends on which one quoted, so the allowance is unknown until then.
+    const spender = quote.value?.spender
+    const [b, al] = await Promise.all([
+      c.readContract({ address: token, abi: erc20Abi, functionName: 'balanceOf', args: [account] }),
+      spender ? c.readContract({ address: token, abi: erc20Abi, functionName: 'allowance', args: [account, spender] }) : null,
+    ])
+    if (current()) { balance.value = b; allowance.value = al }
+  } catch {
+    /* unknown balances never authorize a swap */
+  }
+}
+watch([route, dir, swapFrom, () => quote.value?.spender, () => api.value, () => node.epoch, () => syrius.address, () => evm.account, () => evm.chainId, () => evm.selected], refreshBalances, { immediate: true, flush: 'sync' })
 watch(() => node.tick, (t) => t % 3 === 0 && refreshBalances())
 
 // Recipient: the connected wallet on the receiving side, unless edited.
-const defaultRecipient = computed(() => (dir.value === 'wrap' ? (evm.account ?? '') : (syrius.address ?? '')))
+const defaultRecipient = computed(() => (dir.value === 'unwrap' ? (syrius.address ?? '') : (evm.account ?? '')))
 const recipient = computed(() => (editingRecipient.value ? recipientText.value.trim() : defaultRecipient.value))
 const recipientValid = computed(() =>
-  dir.value === 'wrap' ? isEvmRecipient(recipient.value) : isUserAddress(recipient.value),
+  dir.value === 'unwrap' ? isUserAddress(recipient.value) : isEvmRecipient(recipient.value),
 )
 // A wallet connected while the box is open and nothing valid is typed fills
 // it: the box was opened only because there was no wallet to take it from.
@@ -171,9 +348,42 @@ async function checkRecipientPlasma() {
 watch([recipient, dir, () => api.value, () => node.epoch], checkRecipientPlasma, { immediate: true })
 
 const amount = computed(() => parseUnits(amountText.value, decimals.value))
+
+// A swap is priced by the router. The quote is asked for when an input
+// settles, not on a timer: the routers are unkeyed and rate limited.
+// With no wallet yet the quote is only a price; it is asked for again once there is an account to build the transaction for.
+const NO_ACCOUNT = '0x000000000000000000000000000000000000dEaD'
+const quoteRequest = computed(() => {
+  if (dir.value !== 'swap' || !config.swap || !swapFrom.value || !swapTo.value || !amount.value) return null
+  const fromAddress = evm.account ?? NO_ACCOUNT
+  return { from: swapFrom.value, to: swapTo.value, amount: amount.value, fromAddress, toAddress: recipientValid.value ? recipient.value : fromAddress }
+})
+let quoteSeq = 0
+let quoteTimer: ReturnType<typeof setTimeout> | undefined
+watch(
+  () => {
+    const q = quoteRequest.value
+    return q ? [assetKey(q.from), assetKey(q.to), q.amount, q.fromAddress, q.toAddress].join('|') : ''
+  },
+  () => {
+    clearTimeout(quoteTimer)
+    const seq = ++quoteSeq
+    quote.value = null
+    quoteError.value = ''
+    const req = quoteRequest.value
+    if (!req) return
+    quoteTimer = setTimeout(async () => {
+      const r = await fetchQuote(config.swap!, req)
+      if (!mounted || seq !== quoteSeq) return
+      if (r.ok) quote.value = r.quote
+      else quoteError.value = r.message !== 'No route' && r.message.length <= 40 ? r.message : 'No route found'
+    }, 700)
+  },
+)
+
 const min = computed(() => {
   const r = route.value
-  if (!r) return 0n
+  if (!r || dir.value === 'swap') return 0n
   return dir.value === 'wrap' ? r.pair.minAmount : (r.evmInfo?.minAmount ?? 0n)
 })
 const fee = computed(() => (dir.value === 'wrap' && amount.value && route.value ? wrapFee(amount.value, route.value.pair.feePercentage) : 0n))
@@ -181,10 +391,14 @@ const bonus = computed(
   () => dir.value === 'unwrap' && !!usableReferrer(recipient.value, referrer.value) && !!route.value && bridge.loaded && affiliateActive(bridge.meta, route.value.chainId, route.value.pair.tokenStandard, bridge.evmNetworks[route.value.chainId]?.height ?? undefined),
 )
 const receive = computed(() => {
+  if (dir.value === 'swap') return quote.value?.toAmount ?? 0n
   if (!amount.value || !route.value) return 0n
   return dir.value === 'wrap' ? wrapReceive(amount.value, route.value.pair.feePercentage) : unwrapReceive(amount.value, bonus.value)
 })
 const estimate = computed(() => {
+  if (dir.value === 'swap') {
+    return swapFrom.value && swapTo.value ? swapEstimate(swapFrom.value, swapTo.value, evmNet.value?.blockTime ?? 12, quote.value) : null
+  }
   const r = route.value
   const o = bridge.orch
   if (!r || !o) return null
@@ -206,41 +420,85 @@ const estimate = computed(() => {
   return e.seconds
 })
 
+// Dollar estimates beside the amounts. A token is priced by its EVM form: ZNN
+// on Zenon by the wZNN the bridge pairs it with. Nothing is sent by these.
+const prices = ref<Record<string, { usd: number | null; at: number }>>({})
+const routeAsset = (r: Route | undefined): SwapAsset | null => (r?.evm ? { chainId: r.chainId, address: r.pair.tokenAddress, symbol: r.evm.symbol, decimals: r.evm.decimals } : null)
+const srcPriced = computed(() => (dir.value === 'swap' ? swapFrom.value : routeAsset(route.value)))
+const dstPriced = computed(() => (dir.value === 'swap' ? swapTo.value : routeAsset(route.value)))
+watch(
+  [srcPriced, dstPriced],
+  (list) => {
+    if (!config.swap) return
+    for (const a of list) {
+      if (!a) continue
+      const k = assetKey(a)
+      if (prices.value[k] && Date.now() - prices.value[k].at < 300_000) continue
+      prices.value[k] = { usd: prices.value[k]?.usd ?? null, at: Date.now() }
+      void fetchPrice(config.swap, a).then((usd) => (prices.value[k] = { usd: usd ?? prices.value[k]?.usd ?? null, at: Date.now() }))
+    }
+  },
+  { immediate: true },
+)
+const srcPrice = computed(() => (srcPriced.value ? (prices.value[assetKey(srcPriced.value)]?.usd ?? null) : null))
+const dstPrice = computed(() => (dstPriced.value ? (prices.value[assetKey(dstPriced.value)]?.usd ?? null) : null))
+const srcUsd = computed(() => (srcPrice.value && amount.value ? usdValue(amount.value, decimals.value, srcPrice.value) : null))
+const dstUsd = computed(() => (dstPrice.value && receive.value ? usdValue(receive.value, dstDecimals.value, dstPrice.value) : null))
+
+// A chain's coin also pays for the transaction, so Max leaves some behind.
+const GAS_RESERVE = 5_000_000_000_000_000n
 function setMax() {
   if (busy.value) return
-  if (balance.value !== null) amountText.value = unitsToInput(balance.value, decimals.value)
+  if (balance.value === null) return
+  const native = dir.value === 'swap' && !!swapFrom.value && isNative(swapFrom.value)
+  const max = native ? (balance.value > GAS_RESERVE ? balance.value - GAS_RESERVE : 0n) : balance.value
+  amountText.value = unitsToInput(max, decimals.value)
 }
 
 function flip() {
   if (busy.value) return
+  if (dir.value === 'swap') {
+    if (swapFrom.value && swapTo.value) setSwap(swapTo.value, swapFrom.value)
+    return
+  }
   dir.value = dir.value === 'wrap' ? 'unwrap' : 'wrap'
 }
 
 const needsApproval = computed(
-  () => dir.value === 'unwrap' && amount.value !== null && allowance.value !== null && allowance.value < amount.value,
+  () =>
+    (dir.value === 'unwrap' || (dir.value === 'swap' && !!swapFrom.value && !isNative(swapFrom.value))) &&
+    amount.value !== null &&
+    allowance.value !== null &&
+    allowance.value < amount.value,
 )
 
 // The button says what is missing, in the order the user meets it.
 const blocker = computed<string>(() => {
-  if (!bridge.loaded) return 'Loading'
-  if (!route.value) return 'No route'
+  const swap = dir.value === 'swap'
+  if (!swap && !bridge.loaded) return 'Loading'
+  if (swap ? !swapFrom.value || !swapTo.value : !route.value) return 'No route found'
   if (dir.value === 'wrap' && !syrius.address) return syrius.present ? 'Connect Syrius' : 'Install Syrius'
   if (dir.value === 'wrap' && wrongZenonChain()) return 'Syrius is on another chain'
-  if (dir.value === 'unwrap' && !evm.account) return 'Connect EVM wallet'
-  if (dir.value === 'unwrap' && evm.chainId !== chainId.value) return `Switch to ${net.value?.name}`
+  if (dir.value !== 'wrap' && !evm.account) return 'Connect EVM wallet'
+  if (dir.value !== 'wrap' && evm.chainId !== chainId.value) return `Switch to ${net.value?.name}`
   if (!amountText.value) return 'Enter an amount'
   if (amount.value === null) return 'Use a decimal dot; no grouping separators'
   if (amount.value === 0n) return 'Enter an amount'
   if (amount.value < min.value) return `Minimum ${formatUnits(min.value, decimals.value)} ${srcSymbol.value}`
   if (balance.value !== null && amount.value > balance.value) return `Not enough ${srcSymbol.value}`
-  if (!recipient.value) return dir.value === 'wrap' ? 'Connect EVM wallet or enter recipient' : 'Connect Syrius or enter recipient'
+  if (!recipient.value) return dir.value === 'unwrap' ? 'Connect Syrius or enter recipient' : 'Connect EVM wallet or enter recipient'
   if (!recipientValid.value) return 'Invalid recipient'
   if (operations.error) return 'Operation history unavailable'
   const source = dir.value === 'wrap' ? 'zenon' : 'evm'
   const account = dir.value === 'wrap' ? syrius.address : evm.account
-  const sourceChain = dir.value === 'wrap' ? node.chainId : route.value.chainId
+  const sourceChain = dir.value === 'wrap' ? node.chainId : chainId.value!
   if (account && unresolvedOperation(source, sourceChain, account)) return 'Resolve the earlier operation in Activity'
-  const safety = transferBlocker(route.value, dir.value)
+  if (swap) {
+    if (balance.value === null) return 'Balance unavailable'
+    if (quote.value && Date.now() >= quote.value.expires) return 'Quote expired. Change the amount to refresh.'
+    return quoteError.value || (quote.value && (isNative(swapFrom.value!) || allowance.value !== null) ? '' : 'Getting quote')
+  }
+  const safety = transferBlocker(route.value!, dir.value === 'wrap' ? 'wrap' : 'unwrap')
   if (safety) return safety
   if (balance.value === null || dir.value === 'unwrap' && allowance.value === null) return 'Balance or allowance unavailable'
   return ''
@@ -249,6 +507,7 @@ const blocker = computed<string>(() => {
 const actionLabel = computed(() => {
   if (blocker.value) return blocker.value
   if (needsApproval.value) return `Approve ${srcSymbol.value}`
+  if (dir.value === 'swap') return swapFrom.value?.chainId === swapTo.value?.chainId ? 'Swap' : `Swap to ${dstNet.value}`
   return dir.value === 'wrap' ? `Bridge to ${net.value?.name}` : 'Bridge to Zenon'
 })
 
@@ -265,9 +524,11 @@ async function onAction() {
     if (b === 'Connect EVM wallet') return void (evm.pickerOpen = true)
     if (b.startsWith('Switch to') && chainId.value) return await ensureChain(chainId.value)
     if (b) return
-    if (!accepted.value) return void (termsOpen.value = true)
+    // The terms are the bridge's; a swap does not use it.
+    if (dir.value !== 'swap' && !accepted.value) return void (termsOpen.value = true)
     if (needsApproval.value) return await approve()
-    if (dir.value === 'wrap') await sendWrap()
+    if (dir.value === 'swap') await sendSwap()
+    else if (dir.value === 'wrap') await sendWrap()
     else await sendUnwrap()
   } catch (err) {
     toastError(err)
@@ -275,13 +536,14 @@ async function onAction() {
 }
 
 function snapshot() {
+  const direction = dir.value
+  if (direction === 'swap') throw new Error('Use the captured swap quote')
   const selected = route.value
   if (!selected || !amount.value || !recipientValid.value) throw new Error('Transfer details are unavailable')
   const r = { ...selected, pair: { ...selected.pair } }
   const captured = { r, amount: amount.value, receive: receive.value, recipient: recipient.value, znn: node.chainId,
     account: dir.value === 'wrap' ? syrius.address! : evm.account!, provider: evm.selected?.provider,
     nodeKey: nodeContext(), bonus: bonus.value, referral: referrer.value, createdAt: Math.floor(Date.now() / 1000) }
-  const direction = dir.value
   const economics = (value: Route | undefined) => JSON.stringify([value?.pair, value?.evmInfo, value?.zts?.decimals, value?.evm?.decimals, bridge.info?.compressedTssECDSAPubKey, bridge.info?.metadata], (_key, value) => typeof value === 'bigint' ? value.toString() : value)
   const chosenEconomics = economics(r)
   const guard = () => {
@@ -310,6 +572,7 @@ async function sendWrap() {
 }
 
 async function approve() {
+  if (dir.value === 'swap') return approveSwap()
   const s = snapshot()
   approving.value = true
   try {
@@ -342,6 +605,80 @@ async function sendUnwrap() {
     await successfulReceipt(readClient(s.r.chainId, { provider: s.provider!, chainId: s.r.chainId }), s.r.chainId, hash)
     if (mounted) { amountText.value = ''; go('activity') }
   } finally { sending.value = false }
+}
+
+async function sendSwap() {
+  const s = swapSnapshot()
+  sending.value = true
+  try {
+    const q = s.quote
+    const { from, to } = q.request
+    await ensureChain(from.chainId)
+    s.guard()
+    const w = writeClient(from.chainId, s.provider, s.account)
+    const payload = JSON.stringify({ to: q.tx.to.toLowerCase(), data: q.tx.data.toLowerCase(), value: q.tx.value.toString() })
+    const hash = await submitTransaction({ chainId: from.chainId, account: s.account, kind: 'swap', payload }, s.guard,
+      () => w.sendTransaction({ ...q.tx, chain: w.chain, account: s.account }))
+    if (mounted) amountText.value = ''
+    void followSwap(hash, from, to, q.provider, s.provider)
+  } finally {
+    sending.value = false
+  }
+}
+
+function swapSnapshot() {
+  const q = quote.value, account = evm.account, provider = evm.selected?.provider
+  if (!q || !account || !provider || q.request.fromAddress.toLowerCase() !== account.toLowerCase()) throw new Error('Swap details are unavailable')
+  const chosen = JSON.stringify(q, (_key, value) => typeof value === 'bigint' ? value.toString() : value)
+  const guard = () => {
+    if (!mounted || dir.value !== 'swap' || provider !== evm.selected?.provider || account !== evm.account || evm.chainId !== q.request.from.chainId ||
+      amount.value !== q.request.amount || recipient.value.toLowerCase() !== q.request.toAddress.toLowerCase() ||
+      !sameAsset(swapFrom.value, q.request.from) || !sameAsset(swapTo.value, q.request.to) || Date.now() >= q.expires ||
+      JSON.stringify(quote.value, (_key, value) => typeof value === 'bigint' ? value.toString() : value) !== chosen) throw new Error('Swap or wallet changed. Review a fresh quote before submission.')
+  }
+  guard()
+  return { quote: { ...q, request: { ...q.request, from: { ...q.request.from }, to: { ...q.request.to } }, tx: { ...q.tx } }, account, provider, guard }
+}
+
+async function approveSwap() {
+  const s = swapSnapshot(), q = s.quote, chainId = q.request.from.chainId
+  const token = q.request.from.address as `0x${string}`, args = [q.spender, q.request.amount] as const
+  approving.value = true
+  try {
+    s.guard()
+    const w = writeClient(chainId, s.provider, s.account)
+    const hash = await submitTransaction({ chainId, account: s.account, kind: 'swap-approval', payload: transactionPayload(token, erc20Abi, 'approve', args) }, s.guard,
+      () => w.writeContract({ address: token, abi: erc20Abi, functionName: 'approve', args, chain: w.chain, account: s.account }))
+    await successfulReceipt(readClient(chainId, { provider: s.provider, chainId }), chainId, hash)
+    if (mounted) await refreshBalances()
+  } finally { approving.value = false }
+}
+
+// The durable journal in Activity retains the source hash. Router status is
+// advisory; it does not authenticate a destination receipt or economic result.
+async function followSwap(hash: `0x${string}`, from: SwapAsset, to: SwapAsset, provider: Provider, walletProvider: NonNullable<typeof evm.selected>['provider']) {
+  const cross = from.chainId !== to.chainId
+  const href = cross && provider === 'lifi' ? `${config.swap!.lifi.scan}${hash}` : evmTxUrl(from.chainId, hash)
+  const link = href ? { href, label: 'View' } : undefined
+  toast('Swap sent', 'wait', link)
+  try {
+    await successfulReceipt(readClient(from.chainId, { provider: walletProvider, chainId: from.chainId }), from.chainId, hash)
+    if (!mounted) return
+    if (cross) {
+      let state = 'pending'
+      for (let i = 0; i < 100 && state === 'pending' && mounted; i++) {
+        await new Promise((r) => setTimeout(r, 6000))
+        if (!mounted) return
+        state = await fetchStatus(config.swap!, provider, hash, from.chainId, to.chainId)
+      }
+      if (state === 'failed') return toast('Swap failed', 'danger', link, 8000)
+      if (state === 'pending') return toast('Swap still in transit', 'wait', link, 8000)
+    }
+    toast(cross ? `Router reports ${to.symbol} filled on ${evmChain(to.chainId).name}. Verify the receiving transaction.` : 'Swap source transaction confirmed. Verify the received amount.', 'wait', link, 8000)
+    void refreshBalances()
+  } catch (err) {
+    toastError(err)
+  }
 }
 
 // Plasma: a Zenon address with none cannot send without proof of work.
@@ -379,6 +716,13 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
 <template>
   <section class="rise mx-auto grid max-w-[440px] grid-cols-1 gap-2">
     <h1 class="sr-only">Bridge</h1>
+    <div v-if="config.swap" class="flex justify-center">
+      <div class="seg" role="tablist" :class="{ swap: mode === 'swap' }">
+        <span class="seg-thumb" aria-hidden="true" />
+        <button role="tab" data-testid="mode-bridge" :aria-selected="mode === 'bridge'" :class="{ active: mode === 'bridge' }" :disabled="busy" @click="setMode('bridge')">Bridge</button>
+        <button role="tab" data-testid="mode-swap" :aria-selected="mode === 'swap'" :class="{ active: mode === 'swap' }" :disabled="busy || !bridge.loaded" @click="setMode('swap')">Swap</button>
+      </div>
+    </div>
     <div class="flex items-center justify-between px-1">
       <span v-if="estimate" class="inline-flex items-center gap-1.5 text-sm text-dim"><Clock :size="14" />~{{ duration(estimate) }}</span>
       <span v-else />
@@ -390,9 +734,9 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
 
     <!-- From -->
     <div class="leg">
-      <button class="asset" :disabled="busy || !bridge.loaded" @click="picker = true">
-        <TokenIcon :symbol="srcSymbol" :chain="srcNet" :size="44" />
-        <span class="grid min-w-0 flex-1 text-left">
+      <button class="asset" data-testid="bridge-from" :disabled="busy || !bridge.loaded" @click="openPicker('from')">
+        <TokenIcon :key="`i-${srcSymbol}-${srcNet}`" class="val-in" :symbol="srcSymbol" :chain="srcNet" :size="44" />
+        <span :key="`t-${srcSymbol}-${srcNet}`" class="val-in grid min-w-0 flex-1 text-left">
           <span class="text-lg leading-tight font-semibold">{{ srcSymbol || 'From' }}</span>
           <span class="text-sm text-dim">{{ srcNet }}</span>
         </span>
@@ -404,7 +748,8 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
       </div>
       <div class="mt-1 flex h-5 items-center justify-between text-sm text-dim">
         <span>Balance <Amount :value="balance ?? 0n" :decimals="decimals" /></span>
-        <span v-if="min" class="text-xs">Min <Amount :value="min" :decimals="decimals" /></span>
+        <span v-if="srcUsd" data-testid="bridge-from-usd" class="mono">{{ formatUsd(srcUsd) }}</span>
+        <span v-else-if="min" class="text-xs">Min <Amount :value="min" :decimals="decimals" /></span>
       </div>
     </div>
 
@@ -414,16 +759,16 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
 
     <!-- To -->
     <div class="leg">
-      <button class="asset" :disabled="busy || !bridge.loaded" @click="picker = true">
-        <TokenIcon :symbol="dstSymbol" :chain="dstNet" :size="44" />
-        <span class="grid min-w-0 flex-1 text-left">
+      <button class="asset" data-testid="bridge-to" :disabled="busy || !bridge.loaded" @click="openPicker('to')">
+        <TokenIcon :key="`i-${dstSymbol}-${dstNet}`" class="val-in" :symbol="dstSymbol" :chain="dstNet" :size="44" />
+        <span :key="`t-${dstSymbol}-${dstNet}`" class="val-in grid min-w-0 flex-1 text-left">
           <span class="text-lg leading-tight font-semibold">{{ dstSymbol || 'To' }}</span>
           <span class="text-sm text-dim">{{ dstNet }}</span>
         </span>
         <span class="chevron"><ChevronDown :size="16" /></span>
       </button>
       <div data-testid="bridge-receive" class="mono mt-4 truncate text-[30px] leading-[1.25]" :class="receive ? 'text-fg' : 'text-dim'">
-        {{ receive ? formatUnits(receive, decimals) : '0.00' }}
+        {{ receive ? formatUnits(receive, dstDecimals) : '0.00' }}
       </div>
       <div class="mt-1 flex h-5 items-center gap-1.5 text-sm text-dim">
         <template v-if="recipient">
@@ -431,6 +776,7 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
           <span v-if="editingRecipient" class="chip chip-dim !h-5">Custom</span>
         </template>
         <span v-else>Connect a wallet to receive</span>
+        <span v-if="dstUsd" data-testid="bridge-to-usd" class="mono ml-auto shrink-0">{{ formatUsd(dstUsd) }}</span>
       </div>
     </div>
 
@@ -456,7 +802,40 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
     </button>
 
     <!-- The cost and the steps, one tap away. -->
-    <div v-if="route" class="mt-1 px-1">
+    <div v-if="dir === 'swap'" class="mt-1 px-1">
+      <button class="details-row" :aria-expanded="details" @click="details = !details">
+        <span data-testid="swap-via">{{ quote ? `Via ${quote.via}` : 'No bridge wait' }}</span>
+        <span class="flex-1" />
+        <span>Details</span><ChevronDown :size="14" class="chev" :class="{ up: details }" />
+      </button>
+      <dl v-if="details" class="summary slide-down">
+        <div v-if="quote">
+          <dt>Minimum</dt>
+          <dd><Amount :value="quote.toAmountMin" :decimals="dstDecimals" :symbol="dstSymbol" /></dd>
+        </div>
+        <div v-if="quote && quote.feeUsd">
+          <dt>Fee</dt>
+          <dd class="mono">{{ formatUsd(quote.feeUsd) }}</dd>
+        </div>
+        <div v-if="srcPrice">
+          <dt>{{ srcSymbol }}</dt>
+          <dd class="mono">{{ formatUsd(srcPrice) }}</dd>
+        </div>
+        <div v-if="dstPrice">
+          <dt>{{ dstSymbol }}</dt>
+          <dd class="mono">{{ formatUsd(dstPrice) }}</dd>
+        </div>
+        <div v-if="estimate">
+          <dt>Time</dt>
+          <dd>~{{ duration(estimate) }}</dd>
+        </div>
+        <div>
+          <dt>Steps</dt>
+          <dd>{{ needsApproval ? 'Approve, then swap' : 'One transaction' }}</dd>
+        </div>
+      </dl>
+    </div>
+    <div v-else-if="route" class="mt-1 px-1">
       <button class="details-row" :aria-expanded="details" @click="details = !details">
         <span>{{ dir === 'wrap' ? `Fee ${route.pair.feePercentage / 100}%` : 'No bridge fee' }}</span>
         <span class="flex-1" />
@@ -475,6 +854,10 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
           <dt>Steps</dt>
           <dd>{{ dir === 'wrap' ? `Send on Zenon, then redeem twice on ${route.networkName}` : (needsApproval ? 'Approve, send, then redeem on Zenon' : 'Send, then redeem on Zenon') }}</dd>
         </div>
+        <div v-if="srcPrice">
+          <dt>{{ srcSymbol }}</dt>
+          <dd class="mono">{{ formatUsd(srcPrice) }}</dd>
+        </div>
         <div v-if="dir === 'wrap' && plasma !== null && plasma > 0 && plasma < LOW_PLASMA">
           <dt>Plasma</dt>
           <dd>Low. Fuse QSR for faster sends.</dd>
@@ -482,29 +865,17 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
       </dl>
     </div>
 
-    <!-- Asset: the network and the token, in one place. -->
-    <Modal :open="picker" title="Select asset" @close="picker = false">
-      <div v-if="chains.length > 1" class="mb-3 flex flex-wrap gap-2">
-        <button v-for="id in chains" :key="id" :disabled="busy" class="net-pill" :class="{ active: id === chainId }" @click="chainId = id">
-          <TokenIcon :network="evmChain(id).name" :size="20" />{{ evmChain(id).name }}
-        </button>
-      </div>
+    <!-- One side at a time: the source from every chain, then where it can go. -->
+    <Modal :open="picker !== null" :title="picker === 'to' ? 'To' : 'From'" @close="picker = null">
       <div class="grid gap-1">
-        <button v-for="r in routes" :key="r.key" :disabled="busy" class="pick-row" :class="{ active: r.key === routeKey }" @click="((routeKey = r.key), (picker = false))">
-          <TokenIcon :symbol="dir === 'wrap' ? r.zts?.symbol : r.evm?.symbol" :chain="dir === 'wrap' ? 'Zenon' : r.networkName" :size="36" />
+        <button v-for="o in options" :key="o.id" data-testid="bridge-option" :disabled="busy" class="pick-row" :class="{ active: o.active }" @click="pick(o)">
+          <TokenIcon :symbol="o.symbol" :chain="o.network" :size="36" />
           <span class="grid text-left">
-            <span class="font-medium">{{ dir === 'wrap' ? r.zts?.symbol : r.evm?.symbol }}</span>
-            <span class="text-xs text-dim">{{ dir === 'wrap' ? 'Zenon' : r.networkName }}</span>
+            <span class="font-medium">{{ o.symbol }}</span>
+            <span class="text-xs text-dim">{{ o.network }}</span>
           </span>
-          <ArrowRight :size="14" class="mx-1 text-dim" />
-          <TokenIcon :symbol="dir === 'wrap' ? r.evm?.symbol : r.zts?.symbol" :chain="dir === 'wrap' ? r.networkName : 'Zenon'" :size="36" />
-          <span class="grid text-left">
-            <span class="font-medium">{{ dir === 'wrap' ? r.evm?.symbol : r.zts?.symbol }}</span>
-            <span class="text-xs text-dim">{{ dir === 'wrap' ? r.networkName : 'Zenon' }}</span>
-          </span>
-          <span v-if="dir === 'wrap' && r.pair.feePercentage" class="ml-auto text-xs text-dim">{{ r.pair.feePercentage / 100 }}%</span>
         </button>
-        <p v-if="!routes.length" class="text-soft">None yet</p>
+        <p v-if="!options.length" class="text-soft">None yet</p>
       </div>
     </Modal>
 
@@ -518,13 +889,13 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
           v-if="editingRecipient"
           v-model="recipientText" :disabled="busy"
           class="field mono slide-down mb-2 text-sm"
-          :placeholder="dir === 'wrap' ? '0x…' : 'z1…'"
+          :placeholder="dir === 'unwrap' ? 'z1…' : '0x…'"
           aria-label="Recipient"
           autocomplete="off"
           spellcheck="false"
         />
-        <div v-if="editingRecipient && recipientText && !recipientValid" class="mb-2 text-sm text-danger">Not {{ dir === 'wrap' ? 'an EVM' : 'a Zenon' }} address</div>
-        <button v-if="route?.evm && evm.selected" class="menu-row !px-0" @click="addToken">
+        <div v-if="editingRecipient && recipientText && !recipientValid" class="mb-2 text-sm text-danger">Not {{ dir === 'unwrap' ? 'a Zenon' : 'an EVM' }} address</div>
+        <button v-if="dir !== 'swap' && route?.evm && evm.selected" class="menu-row !px-0" @click="addToken">
           <span class="flex-1 text-left">Add {{ route.evm.symbol }} to wallet</span><Plus :size="16" />
         </button>
       </div>
@@ -535,6 +906,61 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
 </template>
 
 <style scoped>
+/* The mode toggle: one thumb slides between two equal halves, and the labels
+   change colour as it passes. */
+.seg {
+  position: relative;
+  display: inline-grid;
+  grid-template-columns: 1fr 1fr;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card-glass);
+  backdrop-filter: blur(10px);
+}
+.seg-thumb {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 4px;
+  width: calc(50% - 4px);
+  border-radius: 999px;
+  background: var(--raised);
+  box-shadow: var(--edge), var(--shadow-panel);
+  transition: transform 360ms cubic-bezier(0.65, 0, 0.35, 1);
+}
+.seg.swap .seg-thumb {
+  transform: translateX(100%);
+}
+.seg button {
+  position: relative;
+  min-height: 44px;
+  min-width: 96px;
+  padding: 0 22px;
+  border-radius: 999px;
+  color: var(--dim);
+  font-size: 15px;
+  font-weight: 500;
+  transition: color 240ms var(--ease);
+}
+.seg button:hover,
+.seg button.active {
+  color: var(--fg);
+}
+.seg button:active {
+  transform: scale(0.97);
+}
+/* The form stays where it is when the mode or an asset changes. Only what
+   changed is replaced: the new token and its name fade in, in place. */
+@keyframes val-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+}
+.val-in {
+  animation: val-in 260ms var(--ease) both;
+}
 .adv {
   position: relative;
   display: inline-flex;
@@ -721,27 +1147,6 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
 .summary dd {
   text-align: right;
   color: var(--soft);
-}
-.net-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 40px;
-  padding: 0 14px 0 10px;
-  border-radius: 999px;
-  border: 1px solid var(--line);
-  font-size: 14px;
-  color: var(--soft);
-  transition:
-    background 180ms var(--ease),
-    color 180ms var(--ease),
-    border-color 180ms var(--ease);
-}
-.net-pill:hover,
-.net-pill.active {
-  color: var(--fg);
-  background: var(--raised);
-  border-color: var(--line-strong);
 }
 .pick-row {
   display: flex;

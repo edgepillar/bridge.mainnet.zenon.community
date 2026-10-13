@@ -68,3 +68,10 @@ export function percent(numerator: number, denominator: number, digits = 2): str
   if (!denominator) return '0%'
   return `${((numerator / denominator) * 100).toFixed(digits).replace(/\.?0+$/, '')}%`
 }
+
+/** A dollar estimate: cents above a dollar, four significant figures below. */
+export function formatUsd(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '$0'
+  if (value >= 1) return `$${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  return `$${Number(value.toPrecision(4))}`
+}

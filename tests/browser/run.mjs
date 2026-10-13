@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto'
 import puppeteer from 'puppeteer-core'
 import { createServer } from 'vite'
 if (!process.env.CHROME_PATH) throw new Error('Set CHROME_PATH to a compatible Chromium executable')
-const server = await createServer({ server: { host: '127.0.0.1', port: 5195, strictPort: true }, logLevel: 'error' })
+const server = await createServer({ cacheDir: process.env.QUALIFICATION_CACHE_DIR, server: { host: '127.0.0.1', port: 5195, strictPort: true }, logLevel: 'error' })
 await server.listen()
 let browser
 const git = (args) => execFileSync('git', args).toString().trim()
@@ -15,9 +15,10 @@ const report = { mode: 'offline Vue component qualification', startedAt: new Dat
   sourceDirty: git(['status','--porcelain']).length > 0,
   lockfileHash: createHash('sha256').update(fs.readFileSync('package-lock.json')).digest('hex'),
   browserVersion: '', checks: [], errors: [] }
-fs.mkdirSync('.browser-results', { recursive: true })
+const resultsDir = process.env.BROWSER_RESULTS_DIR || '.browser-results'
+fs.mkdirSync(resultsDir, { recursive: true })
 try {
-  browser = await puppeteer.launch({ executablePath: process.env.CHROME_PATH, headless: true })
+  browser = await puppeteer.launch({ executablePath: process.env.CHROME_PATH, userDataDir: process.env.BROWSER_PROFILE_DIR, headless: true })
   report.browserVersion = await browser.version()
   if (process.env.EXPECTED_BROWSER_VERSION) assert(report.browserVersion.endsWith(process.env.EXPECTED_BROWSER_VERSION), 'Browser version differs from qualification pin')
   const page = await browser.newPage()
@@ -55,8 +56,8 @@ try {
       }
     }
   }
-  await fresh(); await page.setViewport({ width: 768, height: 900 });await page.waitForFunction(()=>Number(getComputedStyle(document.querySelector('main section')).opacity)>=0.99); await page.screenshot({ path: '.browser-results/tablet.png', fullPage: true })
-  await page.setViewport({ width: 375, height: 900 }); await page.screenshot({ path: '.browser-results/mobile.png', fullPage: true })
+  await fresh(); await page.setViewport({ width: 768, height: 900 });await page.waitForFunction(()=>Number(getComputedStyle(document.querySelector('main section')).opacity)>=0.99); await page.screenshot({ path: `${resultsDir}/tablet.png`, fullPage: true })
+  await page.setViewport({ width: 375, height: 900 }); await page.screenshot({ path: `${resultsDir}/mobile.png`, fullPage: true })
   await amount('1,000'); assert((await action()).disabled); check('ambiguous amount blocked')
   await amount('2'); await editRecipient()
   await input('input[aria-label="Recipient"]', '0x' + '00'.repeat(20)); assert((await action()).disabled)
@@ -203,10 +204,32 @@ try {
       report.checks.push({name:'responsive layout with disconnected wallets',theme,width,route:route||'bridge'})
     }
   }
+  await page.evaluate(() => localStorage.clear())
+  await page.goto('http://127.0.0.1:5195/tests/browser/harness.html?swap=1')
+  await page.waitForSelector('[data-testid="mode-swap"]')
+  await page.click('[data-testid="mode-swap"]')
+  await amount('0.1')
+  await page.waitForFunction(() => { const b = document.querySelector('[data-testid="bridge-action"]'); return b && !b.disabled && b.textContent.trim() === 'Swap' })
+  await page.evaluate(() => { window.__fixture.knobs.delayEvmWallet = true })
+  await page.click('[data-testid="bridge-action"]')
+  await page.waitForFunction(() => window.__fixture.evmRequests.some((r) => r.method === 'eth_sendTransaction'))
+  assert(await page.$eval('input[aria-label="Amount"]', (e) => e.disabled))
+  assert(await page.$eval('[data-testid="mode-bridge"]', (e) => e.disabled))
+  const swapOriginal = await page.evaluate(() => {
+    window.__fixture.evm.account = '0x' + '56'.repeat(20)
+    window.__fixture.finishEvmWallet()
+    return window.__fixture.evmRequests.find((r) => r.method === 'eth_sendTransaction').params[0]
+  })
+  await page.waitForFunction(() => window.__fixture.operations.entries.some((r) => r.kind === 'swap' && r.hash))
+  const swapRecord = await page.evaluate(() => JSON.parse(JSON.stringify(window.__fixture.operations.entries.find((r) => r.kind === 'swap'))))
+  assert.equal(swapRecord.account.toLowerCase(), swapOriginal.from.toLowerCase())
+  assert.equal(JSON.parse(swapRecord.payload).value, BigInt(swapOriginal.value).toString())
+  assert.equal(swapRecord.hash, '0x' + 'cd'.repeat(32))
+  check('swap late wallet response preserves the original account, value, payload and hash')
   assert.deepEqual(report.errors, []); console.log(`${report.checks.length} browser checks passed with ${report.browserVersion}`)
 } catch (error) { report.errors.push(error.stack || String(error)); process.exitCode = 1 }
 finally {
   await browser?.close(); await server.close()
-  fs.writeFileSync('.browser-results/report.json', JSON.stringify(report, null, 2) + '\n')
+  fs.writeFileSync(`${resultsDir}/report.json`, JSON.stringify(report, null, 2) + '\n')
   if (report.errors.length) console.error(report.errors.join('\n'))
 }

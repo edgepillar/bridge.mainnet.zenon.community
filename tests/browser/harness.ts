@@ -26,15 +26,29 @@ const evmRequests: any[] = []
 let pending: { resolve: (x: unknown) => void; template: any } | null = null
 const receiptHash = '0x' + 'cd'.repeat(32)
 const w = window as any
+const swapEnabled = new URLSearchParams(location.search).has('swap')
+if (!swapEnabled) config.swap = undefined
+const originalFetch = window.fetch.bind(window)
+window.fetch = async (input, init) => {
+  const url = String(input)
+  if (/^https:\/\/(aggregator-api\.kyberswap\.com|app\.across\.to|li\.quest)\//.test(url)) {
+    const body = url.includes('/route/build') ? { data: { amountOut: '100000000', data: '0xe21fd0e9', routerAddress: config.swap!.kyber.router, transactionValue: '100000000000000000' } } :
+      url.includes('/routes?') ? { data: { routeSummary: {} } } : url.includes('/token?') ? { priceUSD: '1' } :
+      url.includes('/chains') ? { chains: [{ id: 1 }] } : url.includes('/available-routes') ? [{ originChainId: 1 }] : { status: 'pending' }
+    return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
+  }
+  return originalFetch(input, init)
+}
 config.evm[1].rpc='http://127.0.0.1:5195/fixture-rpc'
 const knobs = { failBalances: false, receiptReverted: false, delayWallet: false, delayConnect:false, allowance: 0n, failPool:false, wrongPool:false,
-  lpIncrease: false, lpBalance: 1000n, failProgram:false, haltedProgram:false, programRewards:false, stakeCount:0, reward:0n }
+  lpIncrease: false, lpBalance: 1000n, failProgram:false, haltedProgram:false, programRewards:false, stakeCount:0, reward:0n, delayEvmWallet:false }
 const provider = {
   request: async (req: any): Promise<any> => {
     evmRequests.push(req)
     if (req.method === 'eth_chainId') return '0x1'
     if (req.method === 'eth_accounts' || req.method === 'eth_requestAccounts') return [eAddress]
     if (req.method === 'eth_sendTransaction') {
+      if (knobs.delayEvmWallet) return new Promise((resolve) => { w.__fixture.finishEvmWallet = () => resolve(receiptHash) })
       if (req.params[0].data?.startsWith('0x095ea7b3') && !knobs.receiptReverted) knobs.allowance=1000_00000000n
       if (req.params[0].data?.startsWith('0xf305d719') && knobs.lpIncrease && !knobs.receiptReverted) knobs.lpBalance+=100n
       return receiptHash

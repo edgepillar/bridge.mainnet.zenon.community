@@ -11,7 +11,7 @@ everything is read from a Zenon node and the EVM chains.
 
 | View | |
 |---|---|
-| Bridge | Wrap (Zenon to EVM) through Syrius, unwrap (EVM to Zenon) through any EVM wallet. Fee, minimum, receive amount, time estimate, recipient plasma check |
+| Bridge | Wrap (Zenon to EVM) through Syrius, unwrap (EVM to Zenon) through any EVM wallet, and swap between EVM assets on Ethereum and BNB Chain without the bridge. Fee, minimum, receive amount, time estimate, recipient plasma check |
 | Activity | Every transfer for the connected or tracked addresses, live status and countdown, one-click redeem on either side |
 | Liquidity | Add to the wZNN/ETH Uniswap V2 pool, bridge the LP token, stake it for 1 to 12 months, revoke, collect rewards |
 | Stats | Orchestrator status derived on chain, waiting requests, pillars seen signing, networks, pairs, fees held, configuration |
@@ -21,6 +21,14 @@ A red banner on every page says when the bridge is down: halted, generating a
 key, or not signing (the oldest wrap past finality has waited six hours or
 more). As of 2026-10-12 mainnet is in that last state, with requests waiting
 34 days.
+
+Swaps (ETH, BNB and the bridge's own EVM tokens, on one chain or across the
+two) do not go through the orchestrators. A router quotes one transaction and
+the wallet sends it: KyberSwap on one chain, Across between the two, LI.FI
+when neither has a route. A swap settles in seconds, needs an EVM wallet only,
+and keeps working while the bridge is down. Amounts carry a dollar estimate.
+A Bridge or Swap toggle above the form picks the mode; Bridge is the default.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), Swaps and Prices.
 
 What the original app did, flow by flow, is in
 [docs/FUNCTIONALITY.md](docs/FUNCTIONALITY.md). Current safety and qualification boundaries are in [docs/QUALIFICATION.md](docs/QUALIFICATION.md); original-operation recovery is in [docs/RECOVERY.md](docs/RECOVERY.md).

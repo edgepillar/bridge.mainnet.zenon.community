@@ -14,7 +14,8 @@ import { bridge, bridgeDown, transferBlocker } from './state/bridge.ts'
 import { referrer, clearReferral } from './state/referral.ts'
 import { actionCount } from './state/activity.ts'
 import { toasts, dismiss } from './state/toasts.ts'
-import { zenonNetworkName } from './config.ts'
+import { config, zenonNetworkName } from './config.ts'
+import { mode, swapMessage } from './state/swap.ts'
 
 const views = {
   bridge: defineAsyncComponent(() => import('./views/BridgeView.vue')),
@@ -38,15 +39,23 @@ watch(
   },
 )
 const noticeHidden = ref(false)
+// Closing the bridge banner holds until the bridge's state changes or the page is loaded again. The chip in the header stays.
+const downHidden = ref(false)
+watch(
+  () => bridge.health?.state,
+  () => (downHidden.value = false),
+)
 watch(
   () => node.notice,
   () => (noticeHidden.value = false),
 )
+// The bridge's state says nothing about a swap, and a swap's routers nothing about the bridge.
+const swapping = computed(() => route.value === 'bridge' && mode.value === 'swap')
 const downMessage = computed(() => {
   const blocker = transferBlocker()
   if (blocker && !['Bridge is unavailable', 'Bridge is paused'].includes(blocker)) return blocker + '. Refresh before sending.'
   // Stalled: the banner says what it means for the user; Stats has the detail.
-  if (bridge.health?.state === 'down') return 'New transfers will wait too.'
+  if (bridge.health?.state === 'down') return config.swap ? 'Swaps still work.' : ''
   if (bridge.health?.message && bridgeDown()) return bridge.health.message
   if (bridge.info?.halted) return 'The bridge is halted. Transfers are paused.'
   if (bridge.info?.allowKeyGen) return 'Orchestrators are generating a new key. Transfers wait until it is done.'
@@ -109,7 +118,10 @@ const status = computed(() => {
     </header>
 
     <div class="mx-auto mt-2 grid w-full max-w-[640px] grid-cols-1 gap-2 px-4">
-      <Banner v-if="downMessage && route !== 'stats'" tone="danger">
+      <Banner v-if="swapping && swapMessage" tone="danger">
+        <strong>Swaps are unavailable.</strong> {{ swapMessage }}
+      </Banner>
+      <Banner v-if="(downMessage || bridge.health?.state === 'down') && route !== 'stats' && !swapping && !downHidden" tone="danger" dismissable @dismiss="downHidden = true">
         <strong>{{ networkLabel() }} bridge is down.</strong> {{ downMessage }}
         <template #action><a href="#/stats" class="btn btn-ghost btn-sm -my-1 !text-inherit">Status</a></template>
       </Banner>
