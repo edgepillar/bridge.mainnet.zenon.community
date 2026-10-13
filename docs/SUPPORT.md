@@ -10,6 +10,7 @@ A usable publication environment needs HTTPS (or isolated loopback), ES modules,
 | EVM networks | Registered bridge routes with verified read chain/key/decimals/halt | Unknown networks need an appropriate reader and qualified wallet; bridge discovery alone is insufficient |
 | Chromium fixtures | Pinned browser in isolated component/page tests | Local Chromium evidence does not qualify Firefox, WebKit, mobile wallets or a real extension |
 | Liquidity | Verified configured pool and conservative approval/postcondition/stake controls | Full DEX/LP bridge/expiry/reward lifecycle and distribution require separate acceptance |
+| EVM swaps | Captured router quote, durable approval/send identity and authenticated source receipt | Router calldata trust, supported wallet behavior and actual receiving-chain/economic results require separate acceptance |
 
 EVM smart-contract recipients remain valid address types; this does not prove every contract can use the received asset. Zenon recipients/referrers must be user addresses. Zero, malformed and embedded destinations are refused.
 

@@ -40,3 +40,33 @@ The suites run sequentially because administrator/orchestrator/user fixture send
 Protocol delay tests disable interval mining and control EVM blocks explicitly; UI receipt waits restore interval mining. Zenon publication acknowledges a momentum with depth three and waits until a receive source is included before signing. Unknown publications retain the exact signed block and stop replacements. Preserve a failed run before creating a fresh isolated chain.
 
 The one-key orchestrator does not exercise distributed TSS. Native and Docker evidence are separate; a native pass cannot qualify Docker. Real wallet/platform tests, a full pool-to-LP-to-stake lifecycle, independent review, hosted CI and deployment/operator acceptance remain [external gates](QUALIFICATION.md).
+
+### Swaps on a mainnet fork (`e2e/swap.fork.mjs`)
+
+Swaps cannot run on the lab: the routers quote mainnet. This script drives the
+page in headless Chrome with a mock EIP-6963 wallet that forwards to an anvil
+fork of Ethereum, so the quoted transactions really execute:
+
+```
+docker run -d --rm --name swap-fork -p 46599:8545 --entrypoint anvil \
+  ghcr.io/foundry-rs/foundry:v1.8.5@sha256:32c8ea9ef052a440cb1620175987a3f49eff8b068a0c6a3d09ebf7f5f9a0e043 --host 0.0.0.0 --chain-id 1 \
+  --fork-url https://ethereum-rpc.publicnode.com
+npm run test:swap
+docker rm -f swap-fork
+```
+
+It checks the Bridge and Swap modes (what each picker offers, the bridge
+banner hidden in Swap), the dollar estimates, the unfiltered pickers, a wallet refusal
+reading "Declined in wallet", no terms prompt, ETH to wZNN and back through
+KyberSwap with an approve and a custom recipient, and the sending half of ETH
+to BNB through Across. It calls the live router APIs, so it is not part of
+`npm test`, and arrival on the other chain is beyond what a fork can show.
+Start a fresh fork for each run: the routers quote live prices, and an old
+fork drifts from them.
+
+
+The fork script is inherited upstream integration tooling. It was not run as part of the offline or two-chain devnet qualification. Use a fresh isolated fork, the pinned browser and public fixture accounts; never connect a real funded wallet. Router API success or a local fork receipt does not prove destination-chain delivery.
+
+The offline swap component case uses router and wallet stand-ins, delays the original wallet reply, changes the selected account, and verifies that the durable record retains the original payload, amount, account and hash. Parser regressions reject expired/malformed replies, unsafe amounts and malformed calldata. `readiness.test.ts` rejects a node returning the same genesis hash when a recent height was requested, as well as missing, wrong-chain and divergent responses.
+
+The browser runner accepts `BROWSER_RESULTS_DIR`, `BROWSER_PROFILE_DIR` and `QUALIFICATION_CACHE_DIR` for private owned qualification locations. Reports and screenshots remain private until explicitly reviewed for export. Qualification storage and fixture caches must not overwrite historical evidence.

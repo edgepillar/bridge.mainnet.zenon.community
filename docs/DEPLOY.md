@@ -39,3 +39,17 @@ The HTML declares a CSP that allows local scripts/fonts, local or data/HTTPS ima
 7. Maintainer decisions on licensing, ownership, supported integrations and the production activation decision.
 
 Record an owner role and dated evidence for each gate. If the authorized owner or coordination channel is unavailable, the gate remains open; do not infer acceptance from silence.
+
+These gates have distinct scopes. Frontend review and fixture qualification can proceed while Zenon bridge transfers remain paused. Operator incident recovery and a new-transfer activation decision concern the operating Zenon bridge; deploying frontend files cannot satisfy those gates. EVM swaps use independent third-party routers and require their own wallet, quote-service and destination-outcome acceptance. A source receipt or router status is insufficient evidence of destination delivery.
+
+The plasma proxy gate is conditional. The default build contains no plasma-service credential and opens the service's own form. An administrator should record whether proxy mode is actually configured; no proxy deployment is required for a supported form-only release. Source defaults do not establish deployed repository-variable values.
+
+## What is not deployed
+
+No server, no analytics, no remote scripts. Everything the page needs is in
+`dist/`; the workflow fails the build if `dist/` references a CDN.
+
+The page does call third-party APIs at run time: the Zenon and EVM nodes,
+zenonhub's plasma bot, and three swap routers, `aggregator-api.kyberswap.com`,
+`app.across.to` and `li.quest` (LI.FI, also the source of dollar prices). The
+routers need no key. Unkeyed, LI.FI allows 75 quotes per two hours.

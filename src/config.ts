@@ -6,6 +6,8 @@
 // VITE_NETWORK picks the set at build time. `mainnet` is the default and the
 // deployment; `devnet` is what the e2e harness runs against (e2e/README.md).
 
+import type { SwapConfig } from './core/swap.ts'
+
 export interface EvmChainConfig {
   name: string
   short: string
@@ -37,6 +39,8 @@ export interface NetworkConfig {
   evm: Record<number, EvmChainConfig>
   plasmaBot: { url: string; token: string; page: string; mode?: 'direct' | 'proxy' }
   buyZnn: string
+  /** EVM-to-EVM swaps that do not use the bridge, where a router serves the chains. */
+  swap?: SwapConfig
 }
 
 // The chain the node in use is on, set by state/zenon.ts. The explorers below
@@ -97,6 +101,13 @@ const mainnet: NetworkConfig = {
     page: 'https://zenonhub.io/tools/plasma-bot',
   },
   buyZnn: 'https://app.uniswap.org/swap?outputCurrency=0xb2e96a63479C2Edd2FD62b382c89D5CA79f572d3',
+  // Each router's contract is the same address on both chains.
+  swap: {
+    chains: [1, 56],
+    kyber: { api: 'https://aggregator-api.kyberswap.com', router: '0x6131B5fae19EA4f9D964eAc0408E4408b66337b5', slugs: { 1: 'ethereum', 56: 'bsc' } },
+    across: { api: 'https://app.across.to/api', router: '0x97CCDBea4632140639aD5eA9b944aa034eb15fD4' },
+    lifi: { api: 'https://li.quest/v1', router: '0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE', scan: 'https://scan.li.fi/tx/' },
+  },
 }
 
 // The bridge lab (e2e/lab): go-zenon's devnet with the bridge spork active,
