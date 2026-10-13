@@ -9,7 +9,7 @@
 // Native qualification additionally requires five exact-height hash matches.
 import fs from 'node:fs'
 import { execFileSync } from 'node:child_process'
-import { agreesAtHeight } from './readiness.ts'
+import { agreesAtHeight } from './readiness.mjs'
 const args = process.argv.slice(2)
 const waitAt = args.indexOf('--wait')
 const wait = waitAt >= 0 ? Number(args.splice(waitAt, 2)[1]) : 0
@@ -59,10 +59,12 @@ console.log(moved > 0 ? 'producing' : 'NOT producing')
 if (args.includes('--native')) {
   // Production is insufficient: require convergence across the five nodes at
   // an agreed recent height, after a startup window. Never skip this in CI.
-  const end = Date.now() + 300_000
+  // The observed passing Linux warmup consumed 261 s of the old 300 s
+  // budget. Allow bounded startup headroom while retaining every predicate.
+  const end = Date.now() + 600_000
   const nativeStarted = Date.now()
   const report = { schema: 1, sourceCommit: execFileSync('git', ['rev-parse', 'HEAD']).toString().trim(), sourceTree: execFileSync('git', ['rev-parse', 'HEAD^{tree}']).toString().trim(), status: 'WAITING',
-    minimumHeight: 20, depth: 3, requiredSamples: 3, windowSeconds: 300, rounds: [] }
+    minimumHeight: 20, depth: 3, requiredSamples: 3, windowSeconds: 600, rounds: [] }
   const record = () => fs.writeFileSync(new URL('./.build/native/readiness-report.json', import.meta.url), JSON.stringify(report, null, 2) + '\n')
   let agreed = 0
   while (agreed < 3) {

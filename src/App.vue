@@ -55,7 +55,7 @@ const downMessage = computed(() => {
   const blocker = transferBlocker()
   if (blocker && !['Bridge is unavailable', 'Bridge is paused'].includes(blocker)) return blocker + '. Refresh before sending.'
   // Stalled: the banner says what it means for the user; Stats has the detail.
-  if (bridge.health?.state === 'down') return config.swap ? 'Swaps still work.' : ''
+  if (bridge.health?.state === 'down') return config.swap ? 'EVM swaps use separate routers.' : ''
   if (bridge.health?.message && bridgeDown()) return bridge.health.message
   if (bridge.info?.halted) return 'The bridge is halted. Transfers are paused.'
   if (bridge.info?.allowKeyGen) return 'Orchestrators are generating a new key. Transfers wait until it is done.'

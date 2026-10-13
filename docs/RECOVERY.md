@@ -1,5 +1,7 @@
 # Original operation recovery
 
+Swap approvals and sends retain their original transaction fields plus the quoted assets, recipient, amount, minimum output and expiry as private recovery evidence. A confirmed swap journal entry authenticates the source transaction only. The stored quote and router-reported status do not prove delivery on the receiving chain. Preserve this metadata with the original hash; do not publish wallet exports or create a replacement signature to compensate for an uncertain destination outcome.
+
 The interface saves the chosen chain, account, contract, calldata and amount in `bridge.operations.v1` before requesting a wallet signature. Secure-context Web Locks serialize wallet invocation across tabs; browsers without that support cannot sign. Other-tab records are merged, and unresolved records pause new sends from that account and chain after a lock is released or a tab closes. The browser stores transaction evidence, never private keys or seed phrases.
 
 A wallet timeout, lost response or missing receipt does not prove rejection. Keep the original wallet operation and its exact hash. Do not approve a replacement, change nonce, re-sign, or infer a hash from a similar address-history entry. A late result is accepted only from the original request and is recorded against the original intent even if the current screen, account or chain has changed.

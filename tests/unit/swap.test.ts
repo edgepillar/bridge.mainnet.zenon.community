@@ -103,12 +103,13 @@ describe('swap quotes', () => {
     expect(parseAcross(cfg, req({ to: bnb }), across({ expiry: 104 }), 100_000).ok).toBe(false)
   })
   it('refuses malformed calldata and a malformed token transaction value', () => {
+    expect(parseKyber(cfg, req({ amount: -1n }), kyber({ value: 'not an integer' })).ok).toBe(false)
     expect(parseKyber(cfg, req(), { data: { ...kyber().data, data: 'not calldata' } }).ok).toBe(false)
     expect(parseKyber(cfg, sell, kyber({ value: 'not an integer' })).ok).toBe(false)
     expect(parseLifi(cfg, req(), { ...lifi(), transactionRequest: { ...lifi().transactionRequest, data: '0x1' } }).ok).toBe(false)
   })
   it('rejects zero, negative, unsafe numeric and inverted output amounts', () => {
-    for (const amountOut of ['0', '-1', Number.MAX_SAFE_INTEGER + 1]) {
+    for (const amountOut of ['0', '-1', Number.MAX_SAFE_INTEGER + 1, (2n ** 256n).toString()]) {
       expect(parseKyber(cfg, req(), { data: { ...kyber().data, amountOut } }).ok).toBe(false)
     }
     expect(parseAcross(cfg, req({ to: bnb }), { ...across(), minOutputAmount: '99999999999999999999999' }).ok).toBe(false)
@@ -156,6 +157,11 @@ describe('swap quotes', () => {
 })
 
 describe('swap routing', () => {
+  it('bounds an oversized router response and does not use it or shop it elsewhere', async () => {
+    const f = respond({ '/routes?': { body: { data: { routeSummary: 'x'.repeat(300_000) } } } })
+    expect(await fetchQuote(cfg, req(), as(f))).toEqual({ ok: false, message: 'Quote response exceeds size limit' })
+    expect(f).toHaveBeenCalledTimes(1)
+  })
   it('uses KyberSwap on one chain: route, then build with sender and recipient', async () => {
     const f = respond({ '/routes?': { body: { data: { routeSummary: { amountOut: '1' } } } }, '/route/build': { body: kyber() } })
     const r = await fetchQuote(cfg, req({ toAddress: them }), as(f))

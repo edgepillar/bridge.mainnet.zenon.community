@@ -224,7 +224,14 @@ try {
   const swapRecord = await page.evaluate(() => JSON.parse(JSON.stringify(window.__fixture.operations.entries.find((r) => r.kind === 'swap'))))
   assert.equal(swapRecord.account.toLowerCase(), swapOriginal.from.toLowerCase())
   assert.equal(JSON.parse(swapRecord.payload).value, BigInt(swapOriginal.value).toString())
+  const storedQuote = JSON.parse(swapRecord.payload).quote
+  assert.equal(storedQuote.recipient.toLowerCase(), swapOriginal.from.toLowerCase())
+  assert.equal(storedQuote.fromAmount, BigInt(swapOriginal.value).toString())
+  assert.equal(storedQuote.fromChainId, 1)
   assert.equal(swapRecord.hash, '0x' + 'cd'.repeat(32))
+  const durableSwap = await page.evaluate(() => JSON.parse(localStorage.getItem('bridge.operations.v1')).find((r) => r.kind === 'swap'))
+  assert.equal(durableSwap.payload, swapRecord.payload)
+  assert.equal(durableSwap.hash, swapRecord.hash)
   check('swap late wallet response preserves the original account, value, payload and hash')
   assert.deepEqual(report.errors, []); console.log(`${report.checks.length} browser checks passed with ${report.browserVersion}`)
 } catch (error) { report.errors.push(error.stack || String(error)); process.exitCode = 1 }

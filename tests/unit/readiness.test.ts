@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { agreesAtHeight } from '../../e2e/lab/readiness.ts'
+import { agreesAtHeight } from '../../e2e/lab/readiness.mjs'
 const hash = 'ab'.repeat(32)
 const sample = () => ({ chainIdentifier: 322, height: 25, hash })
 describe('five-node exact-height readiness', () => {
