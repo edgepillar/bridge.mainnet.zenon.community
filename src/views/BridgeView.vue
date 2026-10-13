@@ -616,7 +616,7 @@ async function sendSwap() {
     await ensureChain(from.chainId)
     s.guard()
     const w = writeClient(from.chainId, s.provider, s.account)
-    const payload = JSON.stringify({ to: q.tx.to.toLowerCase(), data: q.tx.data.toLowerCase(), value: q.tx.value.toString() })
+    const payload = swapPayload(q, JSON.stringify({ to: q.tx.to.toLowerCase(), data: q.tx.data.toLowerCase(), value: q.tx.value.toString() }))
     const hash = await submitTransaction({ chainId: from.chainId, account: s.account, kind: 'swap', payload }, s.guard,
       () => w.sendTransaction({ ...q.tx, chain: w.chain, account: s.account }))
     if (mounted) amountText.value = ''
@@ -640,6 +640,14 @@ function swapSnapshot() {
   return { quote: { ...q, request: { ...q.request, from: { ...q.request.from }, to: { ...q.request.to } }, tx: { ...q.tx } }, account, provider, guard }
 }
 
+function swapPayload(q: Quote, transaction: string): string {
+  // Preserve the chosen economic context as private recovery evidence. These
+  // quote fields do not authenticate opaque calldata or receiving-chain state.
+  return JSON.stringify({ ...JSON.parse(transaction), quote: { provider: q.provider, fromChainId: q.request.from.chainId, fromToken: q.request.from.address,
+    toChainId: q.request.to.chainId, toToken: q.request.to.address, recipient: q.request.toAddress, fromAmount: q.request.amount.toString(),
+    minimumOutput: q.toAmountMin.toString(), expiresAt: q.expires } })
+}
+
 async function approveSwap() {
   const s = swapSnapshot(), q = s.quote, chainId = q.request.from.chainId
   const token = q.request.from.address as `0x${string}`, args = [q.spender, q.request.amount] as const
@@ -647,7 +655,7 @@ async function approveSwap() {
   try {
     s.guard()
     const w = writeClient(chainId, s.provider, s.account)
-    const hash = await submitTransaction({ chainId, account: s.account, kind: 'swap-approval', payload: transactionPayload(token, erc20Abi, 'approve', args) }, s.guard,
+    const hash = await submitTransaction({ chainId, account: s.account, kind: 'swap-approval', payload: swapPayload(q, transactionPayload(token, erc20Abi, 'approve', args)) }, s.guard,
       () => w.writeContract({ address: token, abi: erc20Abi, functionName: 'approve', args, chain: w.chain, account: s.account }))
     await successfulReceipt(readClient(chainId, { provider: s.provider, chainId }), chainId, hash)
     if (mounted) await refreshBalances()

@@ -84,13 +84,15 @@ interface ApiBody {
   toolDetails?: { name?: unknown }; tool?: unknown; chains?: unknown[]
   status?: unknown; priceUSD?: unknown
 }
-const transactionData = (data: unknown): data is `0x${string}` => typeof data === 'string' && /^0x(?:[a-fA-F0-9]{2}){4,}$/.test(data)
+const transactionData = (data: unknown): data is `0x${string}` => typeof data === 'string' && data.length <= 30_000 && /^0x(?:[a-fA-F0-9]{2}){4,}$/.test(data)
 const positiveOutput = (output: bigint, minimum: bigint) => output > 0n && minimum > 0n && minimum <= output
 const routerFetch = (fetcher: typeof fetch): typeof fetch => (url, init) => fetcher(url, { ...init, signal: AbortSignal.timeout(8000) })
 
 const big = (v: unknown): bigint | null => {
   try {
-    return typeof v === 'string' && /^(?:0x[0-9a-fA-F]+|[0-9]+)$/.test(v) || typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? BigInt(v) : null
+    if (!(typeof v === 'string' && /^(?:0x[0-9a-fA-F]{1,64}|[0-9]{1,78})$/.test(v) || typeof v === 'number' && Number.isSafeInteger(v) && v >= 0)) return null
+    const value = BigInt(v)
+    return value < 2n ** 256n ? value : null
   } catch {
     return null
   }
@@ -99,6 +101,7 @@ const no = (body: ApiBody | null, fallback = 'No route'): QuoteResult => ({ ok: 
 
 /** The checks every router's answer passes before it becomes a quote. */
 function guard(q: QuoteRequest, router: string, to: unknown, approval: unknown, value: bigint): string {
+  if (q.amount <= 0n || q.amount >= 2n ** 256n) return 'Quote requests an invalid amount'
   const r = router.toLowerCase()
   if (typeof to !== 'string' || to.toLowerCase() !== r) return 'Quote names an unknown contract'
   if (!isNative(q.from) && String(approval ?? '').toLowerCase() !== r) return 'Quote names an unknown contract'
@@ -268,11 +271,20 @@ async function quoteLifi(c: SwapConfig, q: QuoteRequest, fetcher: typeof fetch):
 }
 
 async function json(res: Response): Promise<ApiBody | null> {
+  if (!res.body) return null
+  const reader = res.body.getReader(), decoder = new TextDecoder()
+  let size = 0, text = ''
   try {
-    return await res.json()
-  } catch {
-    return null
-  }
+    for (;;) {
+      const { value, done } = await reader.read()
+      if (done) break
+      size += value.byteLength
+      if (size > 256 * 1024) { await reader.cancel(); throw new Error('Quote response exceeds size limit') }
+      text += decoder.decode(value, { stream: true })
+    }
+    text += decoder.decode()
+    try { return JSON.parse(text) as ApiBody } catch { return null }
+  } finally { reader.releaseLock() }
 }
 
 const safely = (f: () => Promise<QuoteResult>): Promise<QuoteResult> =>
@@ -301,7 +313,7 @@ export async function fetchStatus(c: SwapConfig, provider: Provider, txHash: str
         : `${c.lifi.api}/status?${new URLSearchParams({ txHash, fromChain: String(fromChain), toChain: String(toChain) })}`
     const res = await fetcher(url, { headers: { Accept: 'application/json' } })
     if (!res.ok) return 'pending'
-    const s = String((await res.json())?.status ?? '').toLowerCase()
+    const s = String((await json(res))?.status ?? '').toLowerCase()
     if (s === 'done' || s === 'filled') return 'done'
     return s === 'failed' || s === 'expired' || s === 'refunded' ? 'failed' : 'pending'
   } catch {
@@ -357,7 +369,7 @@ export async function fetchPrice(c: SwapConfig, a: SwapAsset, fetcher: typeof fe
   try {
     const res = await fetcher(`${c.lifi.api}/token?${new URLSearchParams({ chain: String(a.chainId), token: a.address })}`, { headers: { Accept: 'application/json' } })
     if (!res.ok) return null
-    const p = Number((await res.json())?.priceUSD)
+    const p = Number((await json(res))?.priceUSD)
     return Number.isFinite(p) && p > 0 ? p : null
   } catch {
     return null
