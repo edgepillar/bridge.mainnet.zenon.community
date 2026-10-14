@@ -58,7 +58,7 @@ try {
   if (!CHROME) throw new Error('Set CHROME_PATH to the pinned fixture browser')
   rpc = forkRpc(FORK)
   await assertEthereumFork(rpc, pins.anvilVersion)
-  server = await createServer({ cacheDir: process.env.QUALIFICATION_CACHE_DIR, server: { host: '127.0.0.1', port: 5231, strictPort: true }, logLevel: 'error' })
+  server = await createServer({ envDir: false, cacheDir: process.env.QUALIFICATION_CACHE_DIR, server: { host: '127.0.0.1', port: 5231, strictPort: true }, logLevel: 'error' })
   await server.listen()
   b = await puppeteer.launch({ executablePath: CHROME, userDataDir: process.env.BROWSER_PROFILE_DIR, headless: true })
   if (!(await b.version()).endsWith('/' + pins.browserVersion)) throw new Error('The swap fixture requires the pinned browser version')
@@ -109,7 +109,13 @@ try {
     const s = (await sent())[n - 1]
     for (let i = 0; i < 40; i++) {
       const r = await rpc('eth_getTransactionReceipt', [s.hash])
-      if (r) return { ...s, status: r.status }
+      if (r) {
+        await p.waitForFunction((hash) => {
+          const records = JSON.parse(localStorage.getItem('bridge.operations.v1') ?? '[]')
+          return records.some((record) => record.hash === hash && record.state === 'confirmed')
+        }, { timeout: 90000 }, s.hash)
+        return { ...s, status: r.status }
+      }
       await sleep(500)
     }
     throw new Error('no receipt')
@@ -166,8 +172,10 @@ try {
   await p.click('[data-testid="bridge-flip"]')
   await p.click('[data-testid="bridge-advanced"]')
   await p.click('[data-testid="custom-recipient"]')
-  await p.click('input[aria-label="Recipient"]', { clickCount: 3 })
+  await p.$eval('input[aria-label="Recipient"]', (e) => { e.focus(); e.select() })
+  await p.keyboard.press('Backspace')
   await p.type('input[aria-label="Recipient"]', THEM)
+  if (await p.$eval('input[aria-label="Recipient"]', (e) => e.value) !== THEM) throw new Error('Fixture recipient input did not retain the intended address')
   await p.click('[role="dialog"] [aria-label="Close"]')
   await closed()
   await setAmount((Number(got / 2n) / 1e8).toFixed(4))

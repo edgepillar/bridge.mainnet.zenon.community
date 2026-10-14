@@ -22,9 +22,9 @@ beforeAll(async()=>{
   // Vitest sets NODE_ENV=test; that would otherwise retain development stores.
   const previousNodeEnv=process.env.NODE_ENV
   process.env.NODE_ENV='production'
-  try { await build({logLevel:'error',mode:'production',build:{outDir,emptyOutDir:true}}) }
+  try { await build({envDir:false,logLevel:'error',mode:'production',build:{outDir,emptyOutDir:true}}) }
   finally { if(previousNodeEnv===undefined)delete process.env.NODE_ENV;else process.env.NODE_ENV=previousNodeEnv }
-  server=await preview({logLevel:'error',build:{outDir},preview:{host:'127.0.0.1',port:5195,strictPort:true}})
+  server=await preview({envDir:false,logLevel:'error',build:{outDir},preview:{host:'127.0.0.1',port:5195,strictPort:true}})
   browser=await puppeteer.launch({executablePath:process.env.CHROME_PATH,headless:true})
   if(process.env.EXPECTED_BROWSER_VERSION)expect((await browser.version()).endsWith(process.env.EXPECTED_BROWSER_VERSION)).toBe(true)
   page=await browser.newPage()

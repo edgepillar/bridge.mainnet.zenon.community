@@ -5,6 +5,7 @@ import { reactive } from 'vue'
 import { isAddress, isUserAddress, isZts } from '../znn/primitives.ts'
 import { isEvmRecipient } from '../core/recipient.ts'
 import { NotSubmittedError } from '../core/errors.ts'
+import { publicationFailure } from '../core/publication-error.ts'
 
 const KEY = 'bridge.operations.v1'
 export type OperationState = 'awaiting-wallet' | 'unknown' | 'submitted' | 'confirmed' | 'reverted' | 'rejected' | 'mismatch'
@@ -21,6 +22,8 @@ export interface Operation extends OperationIntent {
   state: OperationState
   createdAt: number
   hash?: string
+  /** Conflicting failure reports stay private and require independent review. */
+  reportedHashes?: string[]
 }
 const states = ['awaiting-wallet', 'unknown', 'submitted', 'confirmed', 'reverted', 'rejected', 'mismatch']
 const terminal = (state: OperationState) => ['confirmed', 'reverted', 'rejected'].includes(state)
@@ -45,7 +48,8 @@ function valid(value: unknown): value is Operation {
   return typeof r.id === 'string' && r.id.length <= 128 && ['zenon', 'evm'].includes(r.source) &&
     Number.isSafeInteger(r.chainId) && r.chainId > 0 && typeof r.account === 'string' && r.account.length <= 64 &&
     typeof r.kind === 'string' && r.kind.length <= 64 && typeof r.payload === 'string' && r.payload.length <= 32_768 &&
-    Number.isSafeInteger(r.createdAt) && r.createdAt >= 0 && states.includes(r.state) && validPayload(r) && (r.hash === undefined || validHash(r.source, r.hash))
+    Number.isSafeInteger(r.createdAt) && r.createdAt >= 0 && states.includes(r.state) && validPayload(r) && (r.hash === undefined || validHash(r.source, r.hash)) &&
+    (r.reportedHashes === undefined || r.state === 'mismatch' && Array.isArray(r.reportedHashes) && r.reportedHashes.length > 0 && r.reportedHashes.length <= 8 && r.reportedHashes.every((hash: unknown) => validHash(r.source, hash)) && (r.hash === undefined || r.reportedHashes.length === 1 && r.reportedHashes[0].toLowerCase() === r.hash.toLowerCase()))
 }
 
 export function validHash(source: OperationIntent['source'], hash: unknown): hash is string {
@@ -76,7 +80,10 @@ function mergeStored() {
     if (!local) operations.entries.push({ ...stored, state: stored.state === 'awaiting-wallet' ? 'unknown' : stored.state })
     else {
       if (local.source !== stored.source || local.chainId !== stored.chainId || local.account !== stored.account || local.payload !== stored.payload || local.hash && stored.hash && local.hash !== stored.hash) throw new Error('Stored operation identity changed')
+      if (local.state === 'mismatch' && terminal(stored.state)) throw new Error('Mismatched publication cannot be resolved by another tab')
+      if (local.reportedHashes && stored.reportedHashes && JSON.stringify(local.reportedHashes) !== JSON.stringify(stored.reportedHashes)) throw new Error('Stored reported transaction evidence changed')
       if (!local.hash && stored.hash) local.hash = stored.hash
+      if (!local.reportedHashes && stored.reportedHashes) local.reportedHashes = [...stored.reportedHashes]
       if (stored.state === 'mismatch' || terminal(stored.state)) Object.assign(local, stored)
     }
   }
@@ -112,13 +119,17 @@ export function beginOperation(intent: OperationIntent): Operation {
   return entry
 }
 
-export function updateOperation(id: string, update: Pick<Operation, 'state'> & { hash?: string }) {
+export function updateOperation(id: string, update: Pick<Operation, 'state'> & { hash?: string; reportedHashes?: string[] }) {
   const record = operations.entries.find((r) => r.id === id)
   if (!record) throw new Error('Original operation is missing')
   if (record.state === 'mismatch' && update.state !== 'mismatch') throw new Error('Mismatched wallet evidence requires independent review')
   if (terminal(record.state) && update.state !== record.state) throw new Error('A resolved operation cannot be reopened automatically')
   if (['submitted', 'confirmed', 'reverted'].includes(update.state) && !update.hash && !record.hash) throw new Error('A transaction hash is required to resolve publication')
   if (update.hash && (!validHash(record.source, update.hash) || record.hash && record.hash.toLowerCase() !== update.hash.toLowerCase())) throw new Error('Original operation hash cannot be replaced')
+  if (Object.hasOwn(update, 'reportedHashes') && record.reportedHashes && JSON.stringify(record.reportedHashes) !== JSON.stringify(update.reportedHashes)) throw new Error('Reported transaction evidence cannot be replaced')
+  if (update.reportedHashes && (update.state !== 'mismatch' || !update.reportedHashes.length || update.reportedHashes.length > 8 || !update.reportedHashes.every((hash) => validHash(record.source, hash)))) throw new Error('Invalid reported transaction evidence')
+  const reports = update.reportedHashes ?? record.reportedHashes
+  if (update.hash && reports && (reports.length !== 1 || reports[0].toLowerCase() !== update.hash.toLowerCase())) throw new Error('Conflicting reported hashes require independent review')
   Object.assign(record, update, update.hash ? { hash: update.hash.toLowerCase() } : {})
   try { persist() } catch { /* retain exact result in memory and stop subsequent writes */ }
 }
@@ -135,11 +146,13 @@ async function ownedSubmission(intent: OperationIntent, beforeSend: () => void, 
     updateOperation(operation.id, { state: 'submitted', hash })
     return { hash: hash.toLowerCase(), operationId: operation.id }
   } catch (error) {
-    const code = (error as { code?: number } | null)?.code
-    const reportedHash = (error as { reportedHash?: string } | null)?.reportedHash
+    const failure = publicationFailure(error)
+    const reports = [...new Set(failure.reportedHashes.filter((hash) => validHash(intent.source, hash)).map((hash) => hash.toLowerCase()))]
+    const rejected = !invoked || error instanceof NotSubmittedError || [4001, 4100, 4200].includes(failure.code ?? 0)
     updateOperation(operation.id, {
-      state: !invoked || error instanceof NotSubmittedError || code === 4001 || code === 4100 || code === 4200 ? 'rejected' : reportedHash ? 'mismatch' : 'unknown',
-      ...(validHash(intent.source, reportedHash) ? { hash: reportedHash } : {}),
+      state: failure.hasReportedHash ? 'mismatch' : rejected ? 'rejected' : 'unknown',
+      ...(reports.length === 1 ? { hash: reports[0] } : {}),
+      ...(reports.length ? { reportedHashes: reports } : {}),
     })
     throw error
   }

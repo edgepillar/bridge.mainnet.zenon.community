@@ -74,6 +74,10 @@ separate evidence. Use only a separately authorized integration environment.
 | Uncertain outcome | The original operation remains unresolved; no re-sign, automatic replacement or fabricated completion occurs |
 
 Retain private before/after journal evidence and sanitized result references.
+An explicit EIP-1193 rejection from the original request can remain a rejected
+operation when wrapped by the SDK. Display text alone does not establish that
+result. A reported transaction hash takes precedence: preserve the exact report,
+hold conflicting reports for independent review, and request no replacement.
 Record supported Syrius and injected-wallet integrations separately. Hardware,
 smart-contract and other wallet support require their own evidence or an explicit
 product decision; absence of testing is not an unsupported-product declaration.
