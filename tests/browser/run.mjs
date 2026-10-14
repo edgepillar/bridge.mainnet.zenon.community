@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto'
 import puppeteer from 'puppeteer-core'
 import { createServer } from 'vite'
 if (!process.env.CHROME_PATH) throw new Error('Set CHROME_PATH to a compatible Chromium executable')
-const server = await createServer({ cacheDir: process.env.QUALIFICATION_CACHE_DIR, server: { host: '127.0.0.1', port: 5195, strictPort: true }, logLevel: 'error' })
+const server = await createServer({ envDir: false, cacheDir: process.env.QUALIFICATION_CACHE_DIR, server: { host: '127.0.0.1', port: 5195, strictPort: true }, logLevel: 'error' })
 await server.listen()
 let browser
 const git = (args) => execFileSync('git', args).toString().trim()
@@ -137,6 +137,15 @@ try {
   await landing.goto('http://127.0.0.1:5195/affiliate.html?originURL='+encodeURIComponent('/safe-path'))
   await landing.waitForFunction(()=>document.title==='Isolated landing');assert.equal(landing.url(),'http://127.0.0.1:5195/safe-path')
   await landing.close();check('legacy redirect rejects unrelated origins, userinfo and unsupported schemes')
+  await fresh()
+  await editRecipient()
+  const fixtureRecipient='0x1111111111111111111111111111111111111111'
+  await page.$eval('input[aria-label="Recipient"]',(e)=>{e.focus();e.select()})
+  await page.keyboard.press('Backspace')
+  await page.type('input[aria-label="Recipient"]',fixtureRecipient)
+  assert.equal(await page.$eval('input[aria-label="Recipient"]',(e)=>e.value),fixtureRecipient)
+  assert.equal((await action()).label.includes('Invalid recipient'),false)
+  check('keyboard editing replaces the existing fixture recipient exactly')
   await page.evaluate(()=>localStorage.clear());await fresh();await amount('2')
   await page.evaluate(()=>window.__fixture.holdWalletQueue());await page.waitForFunction(()=>!!window.__fixture.releaseConnect)
   await page.click('[data-testid="bridge-action"]');await page.waitForFunction(()=>window.__fixture.operations.entries.length===1)
