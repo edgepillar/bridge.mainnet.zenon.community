@@ -2,9 +2,21 @@
 
 Swap approvals and sends retain their original transaction fields plus the quoted assets, recipient, amount, minimum output and expiry as private recovery evidence. A confirmed swap journal entry authenticates the source transaction only. The stored quote and router-reported status do not prove delivery on the receiving chain. Preserve this metadata with the original hash; do not publish wallet exports or create a replacement signature to compensate for an uncertain destination outcome.
 
-The interface saves the chosen chain, account, contract, calldata and amount in `bridge.operations.v1` before requesting a wallet signature. Secure-context Web Locks serialize wallet invocation across tabs; browsers without that support cannot sign. Other-tab records are merged, and unresolved records pause new sends from that account and chain after a lock is released or a tab closes. The browser stores transaction evidence, never private keys or seed phrases.
+The interface saves the chosen chain, account, contract, calldata and amount in `bridge.operations.v1` before requesting a wallet signature. Secure-context Web Locks serialize wallet invocation across tabs; browsers without that support cannot sign. Other-tab records are merged, and unreviewed unresolved records pause new sends from that account and chain after a lock is released or a tab closes. The browser stores transaction evidence, never private keys or seed phrases.
 
 A wallet timeout, lost response or missing receipt does not prove rejection. Keep the original wallet operation and its exact hash. Do not approve a replacement, change nonce, re-sign, or infer a hash from a similar address-history entry. A late result is accepted only from the original request and is recorded against the original intent even if the current screen, account or chain has changed.
+
+For an `unknown` operation with no reported hash, Activity also offers **Keep
+record and allow a different operation** after at least one minute. Close the
+original wallet prompt, check the wallet's pending transactions and history, then
+explicitly acknowledge that its outcome may still be pending. Another tab's
+active publication lock prevents this review. The action preserves the original
+unknown record, including across reload, and permits a different request. It does
+not prove nonpublication or mark the operation rejected or completed. The same
+encoded request and the same recorded swap economic intent remain blocked even
+with a fresh quote or different router. A later original hash restores the account
+pause until that exact transaction is reconciled. Known hashes and mismatches
+cannot use this path, and time passing alone never unlocks an account.
 
 In Activity, **Original operations** shows unresolved records. Select the original Zenon node/chain for a Zenon operation, or use an EVM reader on the original chain. If a hash was not returned, obtain the exact hash from the original wallet operation and enter it there. Reconciliation checks the transaction's account, chain and chosen fields. Zenon evidence must also match its computed hash, public key, signature and confirmation; EVM evidence must have a matching receipt on a canonical block and at least two confirmations. This short receipt check is not proof of bridge-service completion or irreversible network finality.
 
