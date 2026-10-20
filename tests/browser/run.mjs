@@ -159,6 +159,8 @@ try {
   assert((await action()).disabled)
   await page.click('[data-testid="bridge-advanced"]'); await page.click('[data-testid="send-while-down"]')
   await page.waitForFunction(() => !document.querySelector('[data-testid="bridge-action"]').disabled)
+  await page.evaluate(() => { window.__fixture.node.tick++ })
+  assert(!(await action()).disabled, 'A normal node tick must retain consent for the same health warning')
   await page.evaluate(() => { window.__fixture.bridge.evmNetworks[1].tssMatches = false })
   assert((await action()).disabled)
   await page.evaluate(() => { window.__fixture.bridge.evmNetworks[1].tssMatches = true; window.__fixture.bridge.info.halted = true })
