@@ -89,7 +89,7 @@ use this path. Time passing alone never changes readiness.
 
 The chosen source chain, account, contract, amount, recipient, referral and calldata are captured before awaiting approval. Form controls stay frozen during the operation. Source and economic configuration are checked again before every wallet prompt, including a prompt delayed by the Syrius exclusive queue.
 
-`bridge.operations.v1` is saved and read back before wallet invocation. Secure-context Web Locks serialize publication across tabs. Missing lock support or unreadable storage prevents signing. An unresolved journal record blocks a second operation for the same source/account/chain after reload or tab closure. Other-tab records are merged without discarding original hashes.
+`bridge.operations.v1` is saved and read back before wallet invocation. Secure-context Web Locks serialize publication across tabs. Missing lock support or unreadable storage prevents signing. An unreviewed unresolved journal record blocks a second operation for the same source/account/chain after reload or tab closure. Explicit hashless review permits only different requests as described above; it never resolves or discards the original. Other-tab records are merged without discarding original hashes.
 
 Only the original promise or the exact original hash can resolve an unknown outcome. Zenon recovery verifies chosen fields, computed hash, signature, public key/account and confirmation. EVM recovery verifies the original transaction, receipt, canonical block, reader chain and two confirmations. These reads trust the chosen RPC; they are not a light-client finality proof. A mismatch requires independent review. No replacement, nonce discovery or fuzzy history search is performed.
 
