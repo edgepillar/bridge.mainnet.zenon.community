@@ -21,13 +21,49 @@ The journal retention regression creates and rejects 205 entries through the dur
 
 ## Offline browser qualification
 
-`tests/browser` mounts the actual Vue components and uses isolated providers. Outbound network requests are refused; the disconnected-wallet fallback is served by a loopback fixture. It checks all five views at 320/375/768/1024/1440 pixels in light/dark themes with connected/disconnected wallets, modal keyboard/focus behavior, reduced motion, strict amount/recipient checks, late original results, queued economic changes, reverted receipts, same-origin redirects and real cross-tab Web Locks.
+`tests/browser` mounts the actual Vue components and uses isolated providers. Outbound network requests are refused; the disconnected-wallet fallback is served by a loopback fixture. It checks all five views at 320/375/768/1024/1440 pixels in light/dark themes with connected/disconnected wallets, modal keyboard/focus behavior, the continuously animated chain indicator even with OS animation effects disabled, strict amount/recipient checks, late original results, queued economic changes, reverted receipts, same-origin redirects and real cross-tab Web Locks.
+
+Hashless recovery checks distinguish explicit review from resolution: no timer-only
+unlock, no repeated encoded request or refreshed equivalent swap, durable unknown
+evidence, later original-hash adoption, storage failures and another tab's active
+wallet lock. Health opt-in checks retain hard configuration, halt, route, TSS and
+node authority.
 
 Liquidity cases cover unavailable/substituted pools, reverted approvals, LP completion postconditions, zero/halted/unavailable programs, source changes before a queued stake, complete paginated stake history, expiry cancellation and submitted-only collection. These fixtures do not establish DEX contract behavior, real LP minting, stake economics or a production reward cycle. Results and screenshots are written to ignored `.browser-results`.
 
 Browser launch keeps Chromium's default sandbox. On Ubuntu 24.04, the qualification workflow loads a root-owned AppArmor profile granting user namespaces to the exact pinned headless-shell executable and retains that profile with its evidence artifact. A browser launch failure fails qualification. Local Linux environments may need the corresponding [Chromium namespace configuration](https://chromium.googlesource.com/chromium/src/+/main/docs/security/apparmor-userns-restrictions.md).
 
 ## Isolated protocol and page checks
+
+The isolated bridge lifecycle remains:
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant T as Test or page
+  participant Z as Zenon lab
+  participant O as Test orchestrator
+  participant E as Anvil
+
+  T->>Z: WrapToken, signed with the lab key
+  Z-->>T: request id
+  Note over O: waits for finality
+  O->>Z: UpdateWrapRequest(id, signature)
+  T->>E: redeem, step 1
+  Note over E: redeemDelay blocks, mined on demand
+  T->>E: redeem, step 2
+  E-->>T: wZNN minted
+  T->>E: approve, unwrap("z1recipient&z1referrer")
+  E-->>O: Unwrapped log
+  O->>Z: UnwrapToken, and a second one for the referrer
+  Note over Z: redeemDelay momentums
+  T->>Z: Redeem
+  alt orchestrator stopped
+    Note over T: request stays unsigned, health reads stalled
+  else
+    Z-->>T: ZNN back, plus 1%
+  end
+```
 
 Follow the [pinned lab setup](../e2e/README.md), require successful readiness, then run:
 

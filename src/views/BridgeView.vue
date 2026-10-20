@@ -19,7 +19,7 @@ import TokenIcon from '../components/TokenIcon.vue'
 import Amount from '../components/Amount.vue'
 import Modal from '../components/Modal.vue'
 import Terms from '../components/Terms.vue'
-import { bridge, transferBlocker, nodeContext, type Route } from '../state/bridge.ts'
+import { bridge, transferBlocker, transferHealthWarning, nodeContext, type Route } from '../state/bridge.ts'
 import { api, node, syrius, sendBlock, connectSyrius, wrongZenonChain, onBuildChain } from '../state/zenon.ts'
 import { evm, ensureChain, walletForReads } from '../state/evm.ts'
 import { referrer } from '../state/referral.ts'
@@ -252,6 +252,10 @@ const balance = ref<bigint | null>(null)
 const allowance = ref<bigint | null>(null)
 const plasma = ref<number | null>(null)
 const recipientPlasma = ref<number | null>(null)
+const sendWhileDown = ref(false)
+watch(() => [nodeContext(), route.value?.key, dir.value, syrius.address, evm.account, evm.chainId, evm.selected?.provider, transferHealthWarning()], () => {
+  sendWhileDown.value = false
+}, { flush: 'sync' })
 
 let balanceRequest = 0
 const balanceContext = () => JSON.stringify([nodeContext(), route.value?.key, dir.value, swapFrom.value, quote.value?.spender, syrius.address, evm.account, evm.chainId, evm.selected?.info.uuid])
@@ -498,7 +502,7 @@ const blocker = computed<string>(() => {
     if (quote.value && Date.now() >= quote.value.expires) return 'Quote expired. Change the amount to refresh.'
     return quoteError.value || (quote.value && (isNative(swapFrom.value!) || allowance.value !== null) ? '' : 'Getting quote')
   }
-  const safety = transferBlocker(route.value!, dir.value === 'wrap' ? 'wrap' : 'unwrap')
+  const safety = transferBlocker(route.value!, dir.value === 'wrap' ? 'wrap' : 'unwrap', sendWhileDown.value)
   if (safety) return safety
   if (balance.value === null || dir.value === 'unwrap' && allowance.value === null) return 'Balance or allowance unavailable'
   return ''
@@ -546,13 +550,15 @@ function snapshot() {
     nodeKey: nodeContext(), bonus: bonus.value, referral: referrer.value, createdAt: Math.floor(Date.now() / 1000) }
   const economics = (value: Route | undefined) => JSON.stringify([value?.pair, value?.evmInfo, value?.zts?.decimals, value?.evm?.decimals, bridge.info?.compressedTssECDSAPubKey, bridge.info?.metadata], (_key, value) => typeof value === 'bigint' ? value.toString() : value)
   const chosenEconomics = economics(r)
+  const healthOverride = sendWhileDown.value
   const guard = () => {
     if (!mounted) throw new Error('Transfer view changed before submission')
     if (nodeContext() !== captured.nodeKey || direction !== dir.value || (direction === 'wrap' ? syrius.address : evm.account) !== captured.account ||
       direction === 'unwrap' && (evm.selected?.provider !== captured.provider || evm.chainId !== r.chainId)) throw new Error('Wallet or network changed before submission')
     const currentRoute = bridge.routes.find((x) => x.key === r.key)
     if (economics(currentRoute) !== chosenEconomics) throw new Error('Transfer configuration changed before submission. Review the current amount and limits.')
-    const safety = transferBlocker(currentRoute, direction)
+    if (sendWhileDown.value !== healthOverride) throw new Error('Bridge health consent changed before submission')
+    const safety = transferBlocker(currentRoute, direction, healthOverride)
     if (safety || !bridge.routes.some((x) => x.key === r.key)) throw new Error(safety || 'Route changed before submission')
   }
   return { ...captured, guard }
@@ -789,6 +795,9 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
     </div>
 
     <!-- Notes that matter for this transfer -->
+    <div v-if="dir !== 'swap' && transferHealthWarning()" class="note warn" data-testid="bridge-health-warning">
+      <span>{{ transferHealthWarning() }}. A new transfer may remain unsigned or delayed. {{ sendWhileDown ? 'You chose to send despite this warning.' : 'You can opt in under Advanced.' }}</span>
+    </div>
     <div v-if="dir === 'wrap' && syrius.address && plasma === 0" class="note warn">
       <Fuel :size="15" /><span class="flex-1">No plasma. Syrius will compute proof of work, which is slow.</span>
       <button v-if="plasmaBot.url || plasmaBot.page" class="btn btn-sm" :disabled="plasmaBusy" @click="getPlasma(syrius.address!)">
@@ -903,6 +912,10 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
           spellcheck="false"
         />
         <div v-if="editingRecipient && recipientText && !recipientValid" class="mb-2 text-sm text-danger">Not {{ dir === 'unwrap' ? 'a Zenon' : 'an EVM' }} address</div>
+        <button v-if="dir !== 'swap' && transferHealthWarning()" class="menu-row !px-0" data-testid="send-while-down" :disabled="busy" @click="sendWhileDown = !sendWhileDown">
+          <span class="flex-1 text-left">Send while the bridge is down</span>
+          <span class="switch" role="switch" :aria-checked="sendWhileDown" />
+        </button>
         <button v-if="dir !== 'swap' && route?.evm && evm.selected" class="menu-row !px-0" @click="addToken">
           <span class="flex-1 text-left">Add {{ route.evm.symbol }} to wallet</span><Plus :size="16" />
         </button>

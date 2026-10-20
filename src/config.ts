@@ -97,7 +97,7 @@ const mainnet: NetworkConfig = {
   plasmaBot: {
     url: env.VITE_PLASMA_BOT_URL || 'https://zenonhub.io/api/utilities/plasma-bot/fuse',
     mode: env.VITE_PLASMA_BOT_URL ? 'proxy' : 'direct',
-    token: '',
+    token: env.VITE_PLASMA_BOT_TOKEN || '',
     page: 'https://zenonhub.io/tools/plasma-bot',
   },
   buyZnn: 'https://app.uniswap.org/swap?outputCurrency=0xb2e96a63479C2Edd2FD62b382c89D5CA79f572d3',
@@ -131,7 +131,7 @@ const devnet: NetworkConfig = {
       testnet: true,
     },
   },
-  plasmaBot: { url: env.VITE_PLASMA_BOT_URL || '', token: '', page: '', mode: env.VITE_PLASMA_BOT_URL ? 'proxy' : 'direct' },
+  plasmaBot: { url: env.VITE_PLASMA_BOT_URL || '', token: env.VITE_PLASMA_BOT_TOKEN || '', page: '', mode: env.VITE_PLASMA_BOT_URL ? 'proxy' : 'direct' },
   buyZnn: '',
 }
 

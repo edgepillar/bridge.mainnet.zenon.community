@@ -211,20 +211,24 @@ export async function loadHealth() {
   }
 }
 
-/** New sends require a current configuration and an explicit, fresh health verdict. */
-export function transferBlocker(route?: Route, direction?: 'wrap' | 'unwrap'): string {
+export function transferHealthWarning(): string {
+  void node.tick
+  if (!bridge.health || !bridge.healthAt || Date.now() - bridge.healthAt > READ_TTL_MS || bridge.healthError) return 'Bridge health unavailable'
+  return bridge.health.state === 'unknown' || isDown(bridge.health.state) ? 'Bridge is unavailable' : ''
+}
+
+/** The explicit health opt-in never overrides configuration, identity or halt checks. */
+export function transferBlocker(route?: Route, direction?: 'wrap' | 'unwrap', sendWhileDown = false): string {
   void node.tick
   if (!bridge.loaded || bridge.context !== nodeContext() || !bridge.readAt || Date.now() - bridge.readAt > READ_TTL_MS) return 'Bridge configuration unavailable'
   if (!nodeIsCurrent()) return 'Node is not current'
   if (bridge.info?.halted || bridge.info?.allowKeyGen) return 'Bridge is paused'
-  if (!bridge.health || !bridge.healthAt || Date.now() - bridge.healthAt > READ_TTL_MS || bridge.healthError) return 'Bridge health unavailable'
-  if (bridge.health.state === 'unknown' || isDown(bridge.health.state)) return 'Bridge is unavailable'
   if (route) {
     const net = bridge.evmNetworks[route.chainId]
     if (!net || net.error || net.halted !== false || !net.tssMatches || !route.zts || !route.evm || !route.evmInfo) return 'Destination configuration unavailable'
     if (direction === 'wrap' && !route.canWrap || direction === 'unwrap' && !route.canUnwrap) return 'Route is closed'
   }
-  return ''
+  return sendWhileDown ? '' : transferHealthWarning()
 }
 
 export const bridgeDown = () => Boolean(transferBlocker())

@@ -6,6 +6,7 @@
 # repository variable VITE_BASE to /<repo>/.
 #
 # Optional repository secrets and variables (docs/DEPLOY.md):
+#   secret   VITE_PLASMA_BOT_TOKEN  zenonhub plasma bot token; public once built
 #   variable VITE_PLASMA_BOT_URL    a proxy that holds the token instead
 #   variable VITE_ZNN_NODE          comma-separated wss nodes, first that answers
 #   variable VITE_EVM_RPCS          JSON {chainId: url} for reads with no wallet
@@ -45,6 +46,7 @@ jobs:
           VITE_NETWORK: mainnet
           VITE_BASE: ${{ vars.VITE_BASE || '/' }}
           VITE_PLASMA_BOT_URL: ${{ vars.VITE_PLASMA_BOT_URL }}
+          VITE_PLASMA_BOT_TOKEN: ${{ github.event_name != 'pull_request' && secrets.VITE_PLASMA_BOT_TOKEN || '' }}
           VITE_ZNN_NODE: ${{ vars.VITE_ZNN_NODE }}
           VITE_EVM_RPCS: ${{ vars.VITE_EVM_RPCS }}
       - name: Refuse a build that loads anything from a CDN

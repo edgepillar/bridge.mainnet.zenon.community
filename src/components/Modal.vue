@@ -64,8 +64,4 @@ onUnmounted(() => { generation++; release?.() })
 .modal-leave-to .sheet {
   transform: translateY(24px);
 }
-@media (prefers-reduced-motion: reduce) {
-  .modal-enter-active, .modal-leave-active, .modal-enter-active .sheet, .modal-leave-active .sheet { transition: none; }
-  .modal-enter-from .sheet, .modal-leave-to .sheet { transform: none; }
-}
 </style>
