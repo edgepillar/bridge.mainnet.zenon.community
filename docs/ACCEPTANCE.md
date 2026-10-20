@@ -25,7 +25,7 @@ packet. Preserve the private originals and their exact operation identities.
 | 1 | Incident cause/service state, authority for recovery, and disposition of each existing exact request; sustained signing health | Bridge/TSS operators |
 | 2 | Explicit new-transfer activation decision for an accepted artifact, halt criteria and rollback responsibilities | Maintainers/operators |
 | 3 | One intended Pages publisher, approved candidate deployment, matching served bytes and absence of another writer | Site administrator |
-| 16 | Actual proxy service acceptance, or explicit form-only product scope | Frontend/proxy owner |
+| 16 | Accepted plasma mode: direct browser-public token, actual proxy, or explicit service-form scope | Frontend/proxy owner |
 | 21 | Current-source hosted qualification and enforced required checks | CI/repository administrator |
 | 22 | Independent clean-platform real-wallet results for the cases below | Wallet integration reviewer |
 | 24 | Canonical origin/base, HTTPS and effective HTTP policy/legacy navigation on the approved deployment | Hosting owner |
@@ -106,11 +106,14 @@ Use the private original request/transaction records; never replace them for a
 cleaner test result. Record accepted terminal outcomes or explicit unresolved
 dispositions before a separate activation decision.
 
-If proxy mode is supported, qualify server-held credentials, restricted upstream
+Record the selected plasma mode. Direct mode requires owner acceptance of its
+deliberately browser-public, service-scoped token and service behavior; restoring
+configuration support does not verify a token value or service authorization.
+If proxy mode is selected, qualify server-held credentials, restricted upstream
 access, validation, abuse/rate/quota controls and timeout/failure behavior. Verify
 the browser contains no service credential and does not turn a proxy failure into
-transfer success. For a form-only release, an owner can accept that explicit scope;
-creating a proxy is not required by the default frontend.
+transfer success. For a service-form release, an owner can accept that explicit
+scope. A proxy is not required when that mode is not selected.
 
 Verify dependency/font notice texts from the exact locked package trees and retain
 their terms when distributing. An inventory of package versions, license fields

@@ -14,5 +14,6 @@ interface ImportMetaEnv {
   /** JSON object of chain id to EVM RPC URL, for reads with no wallet connected. */
   readonly VITE_EVM_RPCS?: string
   readonly VITE_PLASMA_BOT_URL?: string
+  readonly VITE_PLASMA_BOT_TOKEN?: string
   readonly VITE_BASE?: string
 }

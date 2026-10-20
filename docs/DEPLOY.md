@@ -18,9 +18,10 @@ Download the accepted `dist` artifact and verify `release-manifest.json`: source
 | `VITE_ZNN_NODE` | Comma-separated WS/WSS nodes; selected node identity is validated |
 | `VITE_EVM_RPCS` | JSON map of chain IDs to public read RPC URLs |
 | `VITE_PLASMA_BOT_URL` | A tokenless proxy endpoint; its server holds any upstream credential |
+| `VITE_PLASMA_BOT_TOKEN` | Optional owner-approved browser-public plasma token for direct mode |
 | `VITE_BASE` | `/` by default; set `/<repository>/` for a project site |
 
-All `VITE_*` values are public once built. Do not put credentials, private endpoint tokens or personal data in them. `VITE_PLASMA_BOT_TOKEN` is no longer read or passed by CI. The default plasma action opens the service's own form. A configured proxy receives only the recipient address and no Authorization header, with a ten-second request deadline. The proxy operator must validate user addresses, apply abuse limits, protect its upstream credential, and qualify quota/error behavior; the repository does not deploy that service.
+All `VITE_*` values are public once built. The owner deliberately supports a browser-public plasma token with the service's `plasma-bot` ability. The Pages workflow passes that optional secret only to non-PR builds; never use a private or broadly privileged credential for this purpose. No token value belongs in source, reports or review text. With no token or proxy, the plasma action opens the service's own form. A configured proxy receives only the recipient address and no Authorization header, with a ten-second request deadline. Direct mode retains the same deadline and sends its configured browser-public token to the service. The proxy operator must validate user addresses, apply abuse limits, protect its upstream credential, and qualify quota/error behavior; the repository does not deploy that service.
 
 ## Browser policy and hosting headers
 
@@ -42,7 +43,7 @@ Record an owner role and dated evidence for each gate. If the authorized owner o
 
 These gates have distinct scopes. Frontend review and fixture qualification can proceed while Zenon bridge transfers remain paused. Operator incident recovery and a new-transfer activation decision concern the operating Zenon bridge; deploying frontend files cannot satisfy those gates. EVM swaps use independent third-party routers and require their own wallet, quote-service and destination-outcome acceptance. A source receipt or router status is insufficient evidence of destination delivery.
 
-The plasma proxy gate is conditional. The default build contains no plasma-service credential and opens the service's own form. An administrator should record whether proxy mode is actually configured; no proxy deployment is required for a supported form-only release. Source defaults do not establish deployed repository-variable values.
+The plasma proxy gate is conditional. An administrator must record whether the accepted deployment uses direct browser-public-token mode, proxy mode or the service's form, and qualify that selected scope. Restoring configuration support does not inspect a deployed token or establish service authorization. No proxy deployment is required when proxy mode is not selected. Source defaults do not establish deployed repository-variable or secret values.
 
 ## What is not deployed
 

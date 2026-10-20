@@ -103,9 +103,9 @@ try {
   await page.waitForFunction(() => document.activeElement?.getAttribute('data-testid') === 'wallet-menu')
   assert.equal(await page.evaluate(() => document.querySelector('#app').inert), false)
   assert.equal(await page.evaluate(() => document.body.style.overflow), ''); check('nested focus trap, Escape ownership, background inertness and focus restoration')
-  const still=await page.$eval('canvas.starfield',(c)=>c.toDataURL())
+  const frame=await page.$eval('canvas.starfield',(c)=>c.toDataURL())
   await new Promise((resolve)=>setTimeout(resolve,120))
-  assert.equal(await page.$eval('canvas.starfield',(c)=>c.toDataURL()),still);check('canvas starfield stays still with reduced motion')
+  assert.notEqual(await page.$eval('canvas.starfield',(c)=>c.toDataURL()),frame);check('canvas chain indicator stays animated with OS animation effects disabled')
   await fresh()
   const second = await browser.newPage()
   await second.goto('http://127.0.0.1:5195/tests/browser/harness.html'); await second.waitForSelector('input[aria-label="Amount"]')
@@ -154,6 +154,55 @@ try {
   assert.equal(await page.evaluate(()=>window.__fixture.sent.length),0)
   assert.equal(await page.evaluate(()=>window.__fixture.operations.entries[0].state),'rejected');check('economic configuration changes abort a queued wallet prompt')
   const clean = async () => { await page.evaluate(()=>localStorage.clear());await fresh() }
+  await clean(); await amount('2')
+  await page.evaluate(() => { window.__fixture.bridge.health.state = 'unknown' })
+  assert((await action()).disabled)
+  await page.click('[data-testid="bridge-advanced"]'); await page.click('[data-testid="send-while-down"]')
+  await page.waitForFunction(() => !document.querySelector('[data-testid="bridge-action"]').disabled)
+  await page.evaluate(() => { window.__fixture.bridge.evmNetworks[1].tssMatches = false })
+  assert((await action()).disabled)
+  await page.evaluate(() => { window.__fixture.bridge.evmNetworks[1].tssMatches = true; window.__fixture.bridge.info.halted = true })
+  assert((await action()).disabled)
+  await page.evaluate(() => { window.__fixture.bridge.info.halted = false; window.__fixture.bridge.healthError = 'Changed fixture health observation' })
+  await page.waitForFunction(() => document.querySelector('[data-testid="send-while-down"] [role="switch"]').getAttribute('aria-checked') === 'false')
+  assert((await action()).disabled)
+  assert.equal(await page.evaluate(() => window.__fixture.sent.length + window.__fixture.evmRequests.filter((r) => r.method === 'eth_sendTransaction').length), 0)
+  check('explicit health opt-in retains halt and TSS guards and resets on changed health evidence')
+  await clean()
+  await page.evaluate(() => {
+    const f = window.__fixture
+    localStorage.setItem('bridge.operations.v1', JSON.stringify([{ id: 'hashless-browser-fixture', source: 'evm', chainId: 1, account: f.evm.account, kind: 'lost-fixture',
+      payload: JSON.stringify({ to: '0x'+'34'.repeat(20), data: '0x1234', value: '0' }), state: 'unknown', createdAt: Math.floor(Date.now()/1000)-61 }]))
+    f.restoreOperations(); location.hash = '#/activity'
+  })
+  await page.waitForSelector('[data-testid="hashless-review-ack"]')
+  assert(await page.$eval('[data-testid="hashless-review-action"]', (e) => e.disabled))
+  const reviewerPeer = await browser.newPage()
+  await reviewerPeer.goto('http://127.0.0.1:5195/tests/browser/harness.html'); await reviewerPeer.waitForSelector('input[aria-label="Amount"]')
+  await reviewerPeer.evaluate(() => {
+    const f = window.__fixture
+    f.ownedReviewRequest = f.journalSubmission({ source: 'evm', chainId: 1, account: '0x'+'56'.repeat(20), kind: 'review-lock-fixture', payload: JSON.stringify({ to: '0x'+'34'.repeat(20), data: '0x1234', value: '0' }) }, () => {}, () => new Promise((resolve) => { f.releaseReviewRequest = () => resolve('0x'+'cd'.repeat(32)) }))
+  })
+  await reviewerPeer.waitForFunction(() => !!window.__fixture.releaseReviewRequest)
+  await page.click('[data-testid="hashless-review-ack"]'); await page.click('[data-testid="hashless-review-action"]')
+  await page.waitForFunction(() => document.body.textContent.includes('Another tab still owns'))
+  assert.equal(await page.evaluate(() => window.__fixture.operations.entries.find((r) => r.id === 'hashless-browser-fixture').reviewedAt), undefined)
+  await reviewerPeer.evaluate(async () => { window.__fixture.releaseReviewRequest(); await window.__fixture.ownedReviewRequest }); await reviewerPeer.close()
+  await page.click('[data-testid="hashless-review-action"]')
+  await page.waitForFunction(() => window.__fixture.operations.entries.find((r) => r.id === 'hashless-browser-fixture').reviewedAt)
+  await fresh()
+  const reviewed = await page.evaluate(async () => {
+    const f = window.__fixture, original = f.operations.entries.find((r) => r.id === 'hashless-browser-fixture')
+    let duplicateCalls = 0, differentCalls = 0, duplicateBlocked = false
+    try { await f.journalSubmission({ source: original.source, chainId: original.chainId, account: original.account, kind: 'new-label', payload: JSON.stringify({ value:'0',data:'0x1234',to:'0x'+'34'.repeat(20) }) }, () => {}, async () => { duplicateCalls++; return '0x'+'ef'.repeat(32) }) }
+    catch { duplicateBlocked = true }
+    await f.journalSubmission({ source: original.source, chainId: original.chainId, account: original.account, kind: 'different-fixture', payload: JSON.stringify({ to:'0x'+'78'.repeat(20),data:'0x1234',value:'1' }) }, () => {}, async () => { differentCalls++; return '0x'+'ef'.repeat(32) })
+    return { original: { state: original.state, hash: original.hash, reviewedAt: original.reviewedAt }, duplicateBlocked, duplicateCalls, differentCalls }
+  })
+  assert.equal(reviewed.original.state, 'unknown'); assert.equal(reviewed.original.hash, undefined); assert(reviewed.original.reviewedAt)
+  assert.equal(reviewed.duplicateBlocked, true); assert.equal(reviewed.duplicateCalls, 0); assert.equal(reviewed.differentCalls, 1)
+  check('hashless review uses the real cross-tab lock and retains unknown evidence across reload without repeating its request')
+  await clean()
   const liquidity = async (settings={}) => {
     await page.evaluate((json)=>{const values=JSON.parse(json);for(const key of ['allowance','reward'])if(key in values)values[key]=BigInt(values[key]);Object.assign(window.__fixture.knobs,values);location.hash='#/liquidity'},JSON.stringify(settings,(_key,value)=>typeof value==='bigint'?value.toString():value))
     await page.waitForSelector('input[aria-label="wZNN amount"]')

@@ -13,7 +13,7 @@ import { toasts } from '../../src/state/toasts.ts'
 import { accepted } from '../../src/state/ack.ts'
 import { bridgeAbi, erc20Abi, pairAbi } from '../../src/evm/abi.ts'
 import { BRIDGE, config } from '../../src/config.ts'
-import { operations, journalSubmission } from '../../src/state/operations.ts'
+import { operations, journalSubmission, restoreOperations } from '../../src/state/operations.ts'
 import * as wallet from '../../src/wallet/syrius.ts'
 
 const zAddress = 'z1qq6eg8n43g032hanpsfp02qcdmv7zfj3y2lt5d'
@@ -129,7 +129,7 @@ api.value = {
   stakeEntries:async(_address:string,index=0,size=100)=>({count:knobs.stakeCount,list:Array.from({length:knobs.stakeCount},(_,i)=>({id:i.toString(16).padStart(64,'0'),tokenStandard:zts,amount:100000000n,weightedAmount:100000000n,startTime:node.timestamp-1000,expirationTime:node.timestamp+(i===0?100:-10),revokeTime:0})).slice(index*size,(index+1)*size),totalAmount:0n,totalWeightedAmount:0n}),uncollectedReward:async()=>({znn:knobs.reward,qsr:0n}),
 } as any
 accepted.value=true
-Object.assign(w,{__fixture:{bridge,node,syrius,evm,activity,toasts,sent,evmRequests,knobs,BRIDGE,operations,journalSubmission,provider,
+Object.assign(w,{__fixture:{bridge,node,syrius,evm,activity,toasts,sent,evmRequests,knobs,BRIDGE,operations,journalSubmission,restoreOperations,provider,
   holdWalletQueue:()=>{knobs.delayConnect=true;w.__fixture.connection=wallet.connect()},
   openNested:()=>{
     const outer=ref(true),inner=ref(false),host=document.createElement('div');document.body.append(host)

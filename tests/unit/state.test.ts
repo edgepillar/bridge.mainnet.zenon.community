@@ -92,6 +92,23 @@ describe('current route and health authority', () => {
     bridge.readAt = Date.now(); node.timestamp -= 121
     expect(transferBlocker()).toContain('Node')
   })
+  it('allows an explicit degraded-health opt-in without bypassing route, halt or node authority', async () => {
+    const { bridge, transferBlocker, node } = await prepare()
+    const route = bridge.routes[0]
+    expect(transferBlocker(route, 'wrap')).toContain('health')
+    expect(transferBlocker(route, 'wrap', true)).toBe('')
+    bridge.health = { state: 'unknown' } as any; bridge.healthAt = Date.now()
+    expect(transferBlocker(route, 'wrap')).toContain('unavailable')
+    expect(transferBlocker(route, 'wrap', true)).toBe('')
+    bridge.info!.halted = true
+    expect(transferBlocker(route, 'wrap', true)).toContain('paused')
+    bridge.info!.halted = false
+    bridge.evmNetworks[route.chainId].tssMatches = false
+    expect(transferBlocker(route, 'wrap', true)).toContain('configuration')
+    bridge.evmNetworks[route.chainId].tssMatches = true
+    node.timestamp -= 121
+    expect(transferBlocker(route, 'wrap', true)).toContain('Node')
+  })
   it('discards old-node routes and lets the new node load while the old read is pending', async () => {
     const { api, node } = await import('../../src/state/zenon.ts')
     const old = fixture('old'), gate = deferred<any[]>()

@@ -17,7 +17,7 @@ flowchart LR
 
 Node epochs and API ownership distinguish a retired connection from the active one. A subscribed momentum can contain only hash/height; its full timestamp and chain identity are fetched and validated before committing. Disconnect cancels RPC waiters, HTTP requests, polling and reconnection. A call has one whole twenty-second deadline.
 
-Routes use network class, EVM chain, bridge contract, Zenon token standard and EVM token address as their identity. Configuration and health reads commit atomically only for their captured context. Missing EVM metadata, chain identity, halted contracts, key or decimal mismatches close the route. Unknown or stale health closes new sends; an explicit degraded-service override cannot override missing configuration or identity.
+Routes use network class, EVM chain, bridge contract, Zenon token standard and EVM token address as their identity. Configuration and health reads commit atomically only for their captured context. Missing EVM metadata, chain identity, halted contracts, key or decimal mismatches close the route. Unknown, stale or down health warns and blocks by default. The Advanced send-while-down opt-in retains the owner's existing product policy; it cannot override configuration, node freshness, identity, halted contracts or route permissions. Changing account, provider, route, node or the health warning resets that consent, including before a delayed wallet prompt.
 
 | Read | Scope and bound |
 |---|---|
@@ -31,7 +31,61 @@ Routes use network class, EVM chain, bridge contract, Zenon token standard and E
 
 Changing nodes, chains, accounts or providers invalidates current action readiness. An old response cannot populate a new scope. Failed history reads retain dated rows with an explicit error. Known unresolved operations are reconciled independently of address-history availability. Amounts use integer arithmetic; ambiguous comma separators and excess precision are refused.
 
+## Which node
+
+The page reads from the default node (`wss://my.hc1node.com:35998` on mainnet,
+with one fallback). The node Syrius reports is used only when the user turns on
+"Use Syrius node" in the Syrius menu and confirms the network that node says it
+is on. That node decides what the page shows, so the user is told which network
+it is before anything is read from it: chain 1 is Mainnet, 3 is Testnet, any
+other identifier is a devnet.
+
+```mermaid
+sequenceDiagram
+  participant U as User
+  participant P as Page
+  participant S as Syrius
+  participant W as Wallet node
+  participant D as Default node
+
+  P->>D: frontier momentum, first default that answers
+  P->>S: connect
+  S-->>P: address, chain id, node host
+  U->>P: Use Syrius node
+  alt embedded, or remote ws from https
+    Note over P: keep the default, show why
+  else usable
+    P->>W: frontier momentum
+    alt answers within 5 s
+      W-->>P: chain identifier
+      P-->>U: network name and chain id
+      alt confirmed
+        Note over P: every read moves to W, choice remembered
+      else cancelled
+        Note over P: keep the default
+      end
+    else no answer
+      Note over P: keep the default, show why
+    end
+  end
+```
+
+The choice is stored with the chain identifier it was confirmed for. It is
+restored on a later visit only while Syrius still names that node and the node
+is still on that chain; otherwise the page goes back to the default and says so.
+
+
 ## Publication ownership
+
+A hashless `unknown` record can be explicitly reviewed after at least one minute,
+with the original wallet prompt closed and its pending/history view checked. The
+same publication Web Lock excludes review while another tab still owns a request.
+Review preserves the unresolved record and permits a different request; it does
+not assert nonpublication or resolve the original operation. The same encoded
+request stays blocked, as does the same recorded swap economic intent under a
+refreshed quote or different router. A later original hash restores the account
+pause until its exact evidence is reconciled. Known hashes and mismatches cannot
+use this path. Time passing alone never changes readiness.
 
 The chosen source chain, account, contract, amount, recipient, referral and calldata are captured before awaiting approval. Form controls stay frozen during the operation. Source and economic configuration are checked again before every wallet prompt, including a prompt delayed by the Syrius exclusive queue.
 

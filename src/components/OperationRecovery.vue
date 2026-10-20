@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { operations, type Operation } from '../state/operations.ts'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { operations, reviewHashlessOperation, UNKNOWN_REVIEW_DELAY_SECONDS, type Operation } from '../state/operations.ts'
 import { api, node } from '../state/zenon.ts'
 import { readClient } from '../evm/client.ts'
 import { walletForReads } from '../state/evm.ts'
@@ -12,6 +12,19 @@ const unresolved = computed(() => operations.entries.filter((r) => ['awaiting-wa
 const hashes = ref<Record<string, string>>({})
 const busy = ref<Record<string, boolean>>({})
 const messages = ref<Record<string, string>>({})
+const acknowledged = ref<Record<string, boolean>>({})
+const now = ref(Math.floor(Date.now() / 1000))
+let timer: ReturnType<typeof setInterval>
+onMounted(() => { timer = setInterval(() => { now.value = Math.floor(Date.now() / 1000) }, 1000) })
+onUnmounted(() => clearInterval(timer))
+async function review(operation: Operation) {
+  busy.value[operation.id] = true
+  try {
+    await reviewHashlessOperation(operation.id, acknowledged.value[operation.id] === true)
+    messages.value[operation.id] = 'Record preserved with an unknown outcome. You can start a different operation; repeating this request remains blocked.'
+  } catch (error) { toastError(error) }
+  finally { busy.value[operation.id] = false }
+}
 async function reconcile(operation: Operation) {
   const context = nodeContext(), a = api.value
   const current = () => context === nodeContext() && a === api.value
@@ -37,7 +50,7 @@ async function reconcile(operation: Operation) {
 <template>
   <section v-if="operations.error || unresolved.length" class="panel p-4" aria-label="Original operation recovery" data-testid="operation-recovery">
     <h2 class="font-semibold">Original operations</h2>
-    <p class="mt-1 text-sm text-soft">An unresolved submission pauses further sends from its account and chain. Reconcile the original transaction; do not submit a replacement.</p>
+    <p class="mt-1 text-sm text-soft">Reconcile the original transaction before repeating a request. A missing wallet response does not prove that nothing was sent.</p>
     <p v-if="operations.error" class="mt-2 text-sm text-danger">{{ operations.error }}</p>
     <div v-for="operation in unresolved" :key="operation.id" class="mt-3 grid min-w-0 gap-2 border-t border-line pt-3">
       <div class="flex flex-wrap gap-2 text-sm"><span>{{ operation.kind }}</span><span>{{ operation.source }} chain {{ operation.chainId }}</span><span>{{ operation.state }}</span></div>
@@ -45,6 +58,12 @@ async function reconcile(operation: Operation) {
       <label v-else class="grid gap-1 text-sm"><span>Exact transaction hash from the original wallet operation</span><input v-model="hashes[operation.id]" class="field mono text-xs" autocomplete="off" spellcheck="false" :disabled="operation.state === 'awaiting-wallet' || busy[operation.id]" /></label>
       <button class="btn btn-sm justify-self-start" :disabled="operation.state === 'awaiting-wallet' || operation.state === 'mismatch' || busy[operation.id]" @click="reconcile(operation)">{{ busy[operation.id] ? 'Checking original transaction' : 'Reconcile original transaction' }}</button>
       <p v-if="operation.state === 'mismatch'" class="text-sm text-danger">The response differs from the original intent. Keep the evidence for wallet support.</p>
+      <div v-if="operation.state === 'unknown' && !operation.hash && !operation.reportedHashes?.length && !operation.reviewedAt" class="grid gap-2 text-sm" data-testid="hashless-review">
+        <p>No hash is available. After one minute, close the original prompt and check the wallet's pending transactions and history. Keeping this record allows a different operation; this request stays blocked.</p>
+        <label class="flex items-start gap-2"><input v-model="acknowledged[operation.id]" type="checkbox" :disabled="busy[operation.id]" data-testid="hashless-review-ack" /><span>I closed the original wallet prompt and checked its history. I understand this operation may still be pending.</span></label>
+        <button class="btn btn-sm justify-self-start" data-testid="hashless-review-action" :disabled="!acknowledged[operation.id] || busy[operation.id] || now - operation.createdAt < UNKNOWN_REVIEW_DELAY_SECONDS" @click="review(operation)">Keep record and allow a different operation</button>
+      </div>
+      <p v-if="operation.reviewedAt && operation.state === 'unknown' && !operation.hash" class="text-sm text-soft">Reviewed; outcome remains unknown. Different operations are allowed. Repeating this request remains blocked.</p>
       <p v-if="messages[operation.id]" class="text-sm text-soft" role="status">{{ messages[operation.id] }}</p>
     </div>
   </section>
