@@ -253,7 +253,7 @@ const allowance = ref<bigint | null>(null)
 const plasma = ref<number | null>(null)
 const recipientPlasma = ref<number | null>(null)
 const sendWhileDown = ref(false)
-watch(() => [nodeContext(), route.value?.key, dir.value, syrius.address, evm.account, evm.chainId, evm.selected?.provider, transferHealthWarning()], () => {
+watch([nodeContext, () => route.value?.key, () => dir.value, () => syrius.address, () => evm.account, () => evm.chainId, () => evm.selected?.provider, transferHealthWarning], () => {
   sendWhileDown.value = false
 }, { flush: 'sync' })
 
