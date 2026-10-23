@@ -16,7 +16,7 @@
     "lab:down": "bash e2e/lab/lab.sh down",
     "lab:status": "bash e2e/lab/lab.sh status",
     "lab:wipe": "bash e2e/lab/lab.sh wipe",
-    "lint": "eslint src tests e2e vite.config.ts",
+    "lint": "eslint src tests e2e scripts vite.config.ts",
     "test:coverage": "vitest run --coverage",
     "test:browser": "node tests/browser/run.mjs",
     "lab:build:native": "node e2e/lab/build.mjs native",

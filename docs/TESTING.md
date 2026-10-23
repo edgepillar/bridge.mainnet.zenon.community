@@ -40,12 +40,29 @@ themselves.
 | `compile.test.ts` | Source/compiler/import/settings cache identity |
 | `state.test.ts` | Retired node/account scopes, atomic refresh and bounded histories |
 | `swap-fork.test.ts` | Owned loopback fork preflight, paired RPC responses and refusal before writes |
+| `notices.test.ts` | Exact dependency/font attribution bytes, deterministic manifests, substitution/link/path refusal and preservation of existing output |
+| `wallet-adapters.test.ts` | Serialized Syrius prompts, explicit cooldown-only retries, original response ownership, legacy timeout/rejection and event disposal |
+| `evm-wallet.test.ts` | EIP-6963 discovery, chain/account changes, late initial replies, network switching and silent reconnect ownership |
+| `evm-transactions.test.ts` | Original EVM submission/receipt orchestration, reader/hash/reorg/revert failures and retained uncertain outcomes |
+| `zenon-session.test.ts` | Selected-node probes, wallet-node consent and restoration, late sessions, original publications and unbiased momentum timing samples |
 
 ## Deterministic source checks
 
 `tests/unit` covers recorded ABI/signature vectors, exact fees/amounts, recipient/referral eligibility, complete bounded history, schema/RPC failure handling, retired node/account responses, fail-closed route/health authority, journal persistence and original-outcome recovery, EVM receipt identity, compiler-cache inputs and retry-safe lab publications. Fixtures contain public test accounts; no wallet or production write is used.
 
-Coverage thresholds apply to the selected safety modules listed in `vite.config.ts`, not the whole application. State ownership, orchestration and browser focus have additional targeted tests. A percentage is not a security proof.
+Coverage includes wallet adapters, EVM clients/transaction orchestration, node,
+wallet, bridge and activity state, original-operation recovery, RPC boundaries and
+the notice generator. Global thresholds remain 80% lines/functions/statements and
+70% branches. Additional higher thresholds protect wallet adapters and EVM
+transaction orchestration; the Zenon session has its own threshold. The selected
+scope is explicit in `vite.config.ts`, and does not mean every UI file is measured.
+Browser focus has separate real-browser qualification. A percentage is not a
+security proof.
+
+Controlled local qualification can set `QUALIFICATION_CACHE_DIR`,
+`QUALIFICATION_COVERAGE_DIR` and `QUALIFICATION_ENV_DIR` to owned temporary storage.
+The latter prevents loading private dotenv files during that qualification. Normal
+development retains Vite's configured/default environment behavior.
 
 The journal retention regression creates and rejects 205 entries through the durable APIs. It has a twenty-second test budget because coverage instrumentation on shared CI runners can exceed the default five seconds. Its record-count and unresolved-operation assertions remain required.
 
@@ -64,6 +81,12 @@ Liquidity cases cover unavailable/substituted pools, reverted approvals, LP comp
 Browser launch keeps Chromium's default sandbox. On Ubuntu 24.04, the qualification workflow loads a root-owned AppArmor profile granting user namespaces to the exact pinned headless-shell executable and retains that profile with its evidence artifact. A browser launch failure fails qualification. Local Linux environments may need the corresponding [Chromium namespace configuration](https://chromium.googlesource.com/chromium/src/+/main/docs/security/apparmor-userns-restrictions.md).
 
 ## Isolated protocol and page checks
+
+The compiled-build suite also verifies that every locked non-development package
+has its exact notice text and digest in `third-party-notices/`, including the local
+fonts. The sanitized compiled report records package/file counts and the notice
+manifest digest. Programmatic production builds must exercise this packaging step
+as well as the normal CLI build; a missing notice fails qualification.
 
 The isolated bridge lifecycle remains:
 

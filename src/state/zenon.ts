@@ -108,13 +108,13 @@ async function seedMomentums(owner: ZenonClient, selectedApi: ZenonApi) {
   try {
     const list = await selectedApi.momentums(30)
     if (client !== owner || !list.length) return
-    const ts = list.map((m) => m.timestamp).sort((a, b) => a - b)
-    if (ts.length > 2) {
-      recent.splice(0, recent.length, ...ts)
-      node.rate = (ts[ts.length - 1] - ts[0]) / (ts.length - 1)
-    }
     const top = list.reduce((a, b) => (b.height > a.height ? b : a), list[0])
-    if (top) onMomentum(top, owner, selectedApi)
+    // A subscription may already be ahead of this asynchronous seed. Never
+    // replace its samples, and let onMomentum append the top sample only once.
+    if (top.height <= node.height) return
+    const ts = list.filter((m) => m.height < top.height).map((m) => m.timestamp).sort((a, b) => a - b)
+    recent.splice(0, recent.length, ...ts.slice(-29))
+    onMomentum(top, owner, selectedApi)
   } catch {
     /* the subscription fills it in */
   }

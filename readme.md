@@ -79,6 +79,8 @@ docs/         FUNCTIONALITY, ARCHITECTURE, TESTING, DEPLOY
 - [docs/DEPLOY.md](docs/DEPLOY.md): GitHub Pages, acceptance and the tokenless plasma proxy
 - [docs/RECOVERY.md](docs/RECOVERY.md): original transaction evidence and unknown outcomes
 - [docs/SUPPORT.md](docs/SUPPORT.md): supported capabilities and integration acceptance limits
+- [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md): validation, contribution privacy and confidential reporting boundaries
+- [docs/MAINTENANCE.md](docs/MAINTENANCE.md): dependency update policy, distribution notices and owner decisions
 
 ## Dropped from the original
 
