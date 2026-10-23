@@ -27,7 +27,8 @@ case "${1:-}" in
       printf '%s' "$key" > "$assets/identity"
     fi
     compose up -d
-    node "$here/frontier.mjs" 180 --wait 120
+    node "$here/docker-manifest.mjs"
+    node "$here/frontier.mjs" 180 --wait 120 --docker
     ;;
   status) compose ps -a; node "$here/frontier.mjs" 30 ;;
   down) compose down ;;

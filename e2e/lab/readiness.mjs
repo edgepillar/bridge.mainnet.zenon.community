@@ -12,3 +12,10 @@ export function agreesAtHeight(samples, height) {
   }
   return true
 }
+
+/** Production alone does not make a freshly started lab ready for writes. */
+export function readyAtFrontier(anchor, nodes) {
+  if (!anchor || anchor.chainIdentifier !== 322 || !Number.isSafeInteger(anchor.height) || anchor.height < 20) return false
+  if (nodes.length !== 5 || nodes.some((node) => !node || node.error || node.chainId !== 322 || !Number.isSafeInteger(node.height) || node.height < Math.max(20, anchor.height - 3))) return false
+  return agreesAtHeight(nodes.map((node) => node.momentum), anchor.height - 3)
+}

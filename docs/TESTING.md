@@ -11,6 +11,36 @@ npm run build
 CHROME_PATH=<pinned-headless-shell> npm run test:browser
 ```
 
+## Unit tests
+
+`tests/unit/`, Vitest, no live network. They hold fixtures read from mainnet, so
+the encodings are checked against what the chain accepted rather than against
+themselves.
+
+| File | Checks |
+|---|---|
+| `abi.test.ts` | Method ids equal the selectors on the mainnet bridge chain; `WrapToken` and `Redeem` call data byte for byte equal to mainnet blocks; liquidity calls |
+| `signatures.test.ts` | A wrap signed by the mainnet orchestrators recovers to the bridge's TSS key through the app's message layout and `evmSignature` |
+| `referral.test.ts` | Codes equal the original app's; first referral wins; the unwrap suffix is the decoded address |
+| `core.test.ts` | Fees (against a real mainnet wrap), formatting, wrap and unwrap status, revert reasons, affiliate metadata, the plasma bot call, big-integer JSON |
+| `swap.test.ts` | Each router's request and the reading of its answer (shapes recorded 2026-10-13); a quote naming any contract but that router's, or another amount, is refused and not shopped elsewhere; KyberSwap on one chain, Across on two, LI.FI as the fallback; router availability; transfer status, time, prices |
+| `errors.test.ts` | Thrown errors as shown: viem's wallet rejection text becomes "Declined in wallet", wallet states name the remedy, a revert shows the contract's reason, anything else is one line of 80 characters |
+| `orchestrators.test.ts` | The health verdict: halted, key generation, stalled (mainnet as read on 2026-10-12), delayed, online, idle |
+| `validation.test.ts` | RPC schema bounds, exact identities and malformed/oversized values |
+| `rpc.test.ts` | HTTP/WebSocket lifecycle, paired responses, deadlines and disposal |
+| `safety.test.ts` | Context ownership, hard configuration guards, health override and economic rechecks |
+| `operations.test.ts` | Durable original intent/hash, cross-tab locks, retention and unknown outcomes |
+| `publication-error.test.ts` | Wrapped wallet refusals and ambiguous/errors-with-hashes remain distinct |
+| `hashless-recovery.test.ts` | Explicit delayed review, repeated-intent refusal and persistent unknown evidence |
+| `reconcile.test.ts` | Original Zenon signature/fields and canonical EVM transaction/receipt evidence |
+| `lab-orchestrator.test.ts` | Exact original retries, shutdown ownership and canonical log identity |
+| `lab-publication.test.ts` | Receive source ownership and confirmed acknowledgement depth |
+| `lab-journal.test.ts` | Archived definite pre-publication rejections; transport/internal/unknown failures stay pending |
+| `readiness.test.ts` | Cold-start minimum height and five-node exact recent hash/chain agreement |
+| `compile.test.ts` | Source/compiler/import/settings cache identity |
+| `state.test.ts` | Retired node/account scopes, atomic refresh and bounded histories |
+| `swap-fork.test.ts` | Owned loopback fork preflight, paired RPC responses and refusal before writes |
+
 ## Deterministic source checks
 
 `tests/unit` covers recorded ABI/signature vectors, exact fees/amounts, recipient/referral eligibility, complete bounded history, schema/RPC failure handling, retired node/account responses, fail-closed route/health authority, journal persistence and original-outcome recovery, EVM receipt identity, compiler-cache inputs and retry-safe lab publications. Fixtures contain public test accounts; no wallet or production write is used.
@@ -65,6 +95,32 @@ sequenceDiagram
   end
 ```
 
+### The lab (`e2e/lab/`)
+
+`lab.sh` builds and runs it with Docker. It follows the syrius-extension lab:
+its own compose project, containers, subnet, ports and chain identifier, so it
+shares nothing with another devnet on the machine.
+
+| | |
+|---|---|
+| Zenon | go-zenon's five-node devnet, chain 322, RPC on `127.0.0.1:46997` (HTTP) and `46998` (WS) |
+| EVM | anvil, chain 31337, on `127.0.0.1:46545`, a fresh chain every start |
+| Image | `bridge-lab-znnd:<commit>-<build key>` |
+
+A stock go-zenon devnet cannot run the bridge, for two reasons, and the lab
+changes exactly those:
+
+1. The `bridge-liq` spork is off in the devnet genesis. `make-assets.mjs` turns
+   it on from genesis, as `az` and `htlc` already are.
+2. The bridge administrator is an address compiled into znnd, and its time
+   challenges last one and two days. `znnd/devnet_bridge.go` is added to the
+   build: when `ZNN_DEVNET_BRIDGE=1` it takes the administrator from
+   `ZNN_BRIDGE_ADMIN` and shortens the delays to one and two momentums. This
+   is what go-zenon's own bridge tests do in process. The file is not part of
+   go-zenon and does nothing without the variable.
+
+Set `GO_ZENON_DIR` to the exact checkout in the [pinned lab setup](../e2e/README.md). The image tag includes both the Go source and overlay/build key.
+
 Follow the [pinned lab setup](../e2e/README.md), require successful readiness, then run:
 
 ```sh
@@ -73,7 +129,7 @@ npm run test:e2e
 
 The suites run sequentially because administrator/orchestrator/user fixture sends share one account. They exercise wrap, two delayed EVM redeems, unwrap/referral, Zenon redemption and exact balances, then the actual page with its node/contract reads and injected wallet adapters. `built.e2e.test.ts` also builds the devnet production bundle, serves its actual HTML/CSP and checks routes, absence of development stores and external requests, and mobile layout with disconnected wallets. It records loaded initial JavaScript sizes and hashes separately from later route loads. The lab asserts loopback endpoints and chain IDs before writes. No mainnet funds are used.
 
-Protocol delay tests disable interval mining and control EVM blocks explicitly; UI receipt waits restore interval mining. Zenon publication acknowledges a momentum with depth three and waits until a receive source is included before signing. Unknown publications retain the exact signed block and stop replacements. Preserve a failed run before creating a fresh isolated chain.
+Protocol delay tests disable interval mining and control EVM blocks explicitly; UI receipt waits restore interval mining. Zenon publication acknowledges a momentum with depth three and waits until a receive source is included before signing. Known pre-publication validation rejections are archived under `e2e/.state/rejected/` and release only the matching pending record. Transport, malformed, internal and unclassified RPC failures retain the exact signed block and stop replacements. A retry is explicit; the fixture never re-signs automatically. Preserve a failed run before creating a fresh isolated chain.
 
 The one-key orchestrator does not exercise distributed TSS. Native and Docker evidence are separate; a native pass cannot qualify Docker. Real wallet/platform tests, a full pool-to-LP-to-stake lifecycle, independent review, hosted CI and deployment/operator acceptance remain [external gates](QUALIFICATION.md).
 
@@ -134,3 +190,14 @@ The browser runner accepts `BROWSER_RESULTS_DIR`, `BROWSER_PROFILE_DIR` and `QUA
 Router replies are streamed with a 256 KiB body limit, integer amounts must fit uint256, and calldata is bounded to leave room for durable quote metadata. The private operation payload retains the chosen assets, recipient, amount, minimum output and expiry after reload; these are intended quote values, not authenticated destination results.
 
 Qualification retains each Node matrix job's mainnet `dist` as a separate artifact. Compare their source/lock identities and canonical asset-tree hashes; runtime-specific release manifests are expected to differ. Artifact upload grants no Pages deployment rights. A fork lacking the Pages workflow on its default branch cannot dispatch that workflow; do not move or publish a default branch to bypass this refusal.
+
+### Limits
+
+- One key plays administrator, orchestrator and user on Zenon (devnet index
+  1, the only account with plasma in genesis), so sends are serialised.
+- Momentums take about 15 s on Docker Desktop. The suites take several
+  minutes each.
+- The liquidity contract and the Uniswap pool are not in the lab; full economic flows
+  remain separate acceptance work; fixture and ABI checks cannot prove them.
+- The real Syrius extension and real EVM wallets are not driven. The mocks
+  follow their provider interfaces.

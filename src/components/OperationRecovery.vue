@@ -21,7 +21,7 @@ async function review(operation: Operation) {
   busy.value[operation.id] = true
   try {
     await reviewHashlessOperation(operation.id, acknowledged.value[operation.id] === true)
-    messages.value[operation.id] = 'Record preserved with an unknown outcome. You can start a different operation; repeating this request remains blocked.'
+    messages.value[operation.id] = 'Record kept; outcome unknown. This request stays blocked.'
   } catch (error) { toastError(error) }
   finally { busy.value[operation.id] = false }
 }
@@ -50,7 +50,7 @@ async function reconcile(operation: Operation) {
 <template>
   <section v-if="operations.error || unresolved.length" class="panel p-4" aria-label="Original operation recovery" data-testid="operation-recovery">
     <h2 class="font-semibold">Original operations</h2>
-    <p class="mt-1 text-sm text-soft">Reconcile the original transaction before repeating a request. A missing wallet response does not prove that nothing was sent.</p>
+    <p class="mt-1 text-sm text-soft">Check the original transaction. A missing reply does not mean nothing was sent.</p>
     <p v-if="operations.error" class="mt-2 text-sm text-danger">{{ operations.error }}</p>
     <div v-for="operation in unresolved" :key="operation.id" class="mt-3 grid min-w-0 gap-2 border-t border-line pt-3">
       <div class="flex flex-wrap gap-2 text-sm"><span>{{ operation.kind }}</span><span>{{ operation.source }} chain {{ operation.chainId }}</span><span>{{ operation.state }}</span></div>
@@ -59,11 +59,11 @@ async function reconcile(operation: Operation) {
       <button class="btn btn-sm justify-self-start" :disabled="operation.state === 'awaiting-wallet' || operation.state === 'mismatch' || busy[operation.id]" @click="reconcile(operation)">{{ busy[operation.id] ? 'Checking original transaction' : 'Reconcile original transaction' }}</button>
       <p v-if="operation.state === 'mismatch'" class="text-sm text-danger">The response differs from the original intent. Keep the evidence for wallet support.</p>
       <div v-if="operation.state === 'unknown' && !operation.hash && !operation.reportedHashes?.length && !operation.reviewedAt" class="grid gap-2 text-sm" data-testid="hashless-review">
-        <p>No hash is available. After one minute, close the original prompt and check the wallet's pending transactions and history. Keeping this record allows a different operation; this request stays blocked.</p>
-        <label class="flex items-start gap-2"><input v-model="acknowledged[operation.id]" type="checkbox" :disabled="busy[operation.id]" data-testid="hashless-review-ack" /><span>I closed the original wallet prompt and checked its history. I understand this operation may still be pending.</span></label>
-        <button class="btn btn-sm justify-self-start" data-testid="hashless-review-action" :disabled="!acknowledged[operation.id] || busy[operation.id] || now - operation.createdAt < UNKNOWN_REVIEW_DELAY_SECONDS" @click="review(operation)">Keep record and allow a different operation</button>
+        <p>After one minute, review in your wallet. This request stays blocked.</p>
+        <label class="flex items-start gap-2"><input v-model="acknowledged[operation.id]" type="checkbox" :disabled="busy[operation.id]" data-testid="hashless-review-ack" /><span>I closed the prompt and checked pending transactions and history. It may still be pending.</span></label>
+        <button class="btn btn-sm justify-self-start" data-testid="hashless-review-action" :disabled="!acknowledged[operation.id] || busy[operation.id] || now - operation.createdAt < UNKNOWN_REVIEW_DELAY_SECONDS" @click="review(operation)">Keep record; allow a different request</button>
       </div>
-      <p v-if="operation.reviewedAt && operation.state === 'unknown' && !operation.hash" class="text-sm text-soft">Reviewed; outcome remains unknown. Different operations are allowed. Repeating this request remains blocked.</p>
+      <p v-if="operation.reviewedAt && operation.state === 'unknown' && !operation.hash && !messages[operation.id]" class="text-sm text-soft">Reviewed; outcome unknown. Different requests allowed; this one stays blocked.</p>
       <p v-if="messages[operation.id]" class="text-sm text-soft" role="status">{{ messages[operation.id] }}</p>
     </div>
   </section>

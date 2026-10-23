@@ -742,7 +742,7 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
       <span v-else />
       <button class="adv" data-testid="bridge-advanced" :disabled="busy" @click="advanced = true">
         Advanced<SlidersHorizontal :size="15" />
-        <span v-if="editingRecipient" class="adv-dot" />
+        <span v-if="editingRecipient || (dir !== 'swap' && sendWhileDown)" class="adv-dot" />
       </button>
     </div>
 
@@ -796,7 +796,7 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
 
     <!-- Notes that matter for this transfer -->
     <div v-if="dir !== 'swap' && transferHealthWarning()" class="note warn" data-testid="bridge-health-warning">
-      <span>{{ transferHealthWarning() }}. A new transfer may remain unsigned or delayed. {{ sendWhileDown ? 'You chose to send despite this warning.' : 'You can opt in under Advanced.' }}</span>
+      <span>{{ transferHealthWarning() }}. Transfers may be delayed. {{ sendWhileDown ? 'Send anyway is on.' : 'Send anyway is in Advanced.' }}</span>
     </div>
     <div v-if="dir === 'wrap' && syrius.address && plasma === 0" class="note warn">
       <Fuel :size="15" /><span class="flex-1">No plasma. Syrius will compute proof of work, which is slow.</span>
