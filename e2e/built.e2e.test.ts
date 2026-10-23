@@ -82,7 +82,6 @@ beforeAll(async()=>{
   page.on('response',(response)=>{const url=new URL(response.url());if(url.origin===origin&&url.pathname.endsWith('.js'))scripts.add(url.pathname)})
   await page.goto(origin,{waitUntil:'networkidle0'})
   await page.waitForFunction(()=>document.body.innerText.includes('Anvil'),{timeout:60_000})
-  await expect.poll(()=>socketEvidence.some((socket)=>socket.allowed&&socket.status===101&&!socket.error&&!socket.closed&&socket.frontier?.chainId===322&&socket.frontier.height>=20),{timeout:60_000}).toBe(true)
   initialScripts=[...scripts].sort()
 })
 afterAll(async()=>{
@@ -95,6 +94,7 @@ afterAll(async()=>{
 })
 
 it('loads compiled routes under the declared CSP without development stores or an external request',async()=>{
+  await expect.poll(()=>socketEvidence.some((socket)=>socket.allowed&&socket.status===101&&!socket.error&&!socket.closed&&socket.frontier?.chainId===322&&socket.frontier.height>=20),{timeout:60_000}).toBe(true)
   expect(await page.evaluate(()=>(window as any).__bridge)).toBeUndefined()
   expect(await page.$eval('meta[http-equiv="Content-Security-Policy"]',(element)=>element.getAttribute('content'))).toContain("script-src 'self'")
   expect(errors).toEqual([]);expect(outbound).toEqual([]);expect(violations).toEqual([])
