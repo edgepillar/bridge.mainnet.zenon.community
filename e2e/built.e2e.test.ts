@@ -15,6 +15,8 @@ let server: PreviewServer, browser: Browser, page: Page
 const errors:string[]=[], outbound:string[]=[], scripts=new Set<string>(), violations:string[]=[]
 let initialScripts:string[]=[]
 let noticeEvidence={verified:false,packages:0,files:0,manifestSha256:''}
+// Keep bounded transport facts, never handshake headers or raw RPC frames.
+const socketEvidence:{allowed:boolean;status:number|null;error:boolean;closed:boolean;frontier:{chainId:number;height:number}|null}[]=[]
 const sha=(data:Buffer)=>crypto.createHash('sha256').update(data).digest('hex')
 beforeAll(async()=>{
   await assertLab()
@@ -31,6 +33,44 @@ beforeAll(async()=>{
   page=await browser.newPage()
   page.on('pageerror',(error)=>errors.push(String(error)))
   page.on('console',(message)=>{if(message.type()==='error')errors.push(message.text())})
+  // HTTP readiness cannot prove the browser's WebSocket upgrade or RPC identity.
+  const session=await page.createCDPSession()
+  const sockets=new Map<string,{evidence:typeof socketEvidence[number];frontiers:Set<number>}>()
+  await session.send('Network.enable')
+  session.on('Network.webSocketCreated',({requestId,url})=>{
+    if(socketEvidence.length>=16){errors.push('Compiled browser exceeded the WebSocket evidence bound');return}
+    const evidence={allowed:url==='ws://127.0.0.1:46998/',status:null as number|null,error:false,closed:false,frontier:null as {chainId:number;height:number}|null}
+    socketEvidence.push(evidence);sockets.set(requestId,{evidence,frontiers:new Set()})
+    if(!evidence.allowed)outbound.push('UNEXPECTED_WEBSOCKET_ENDPOINT')
+  })
+  session.on('Network.webSocketHandshakeResponseReceived',({requestId,response})=>{
+    const socket=sockets.get(requestId);if(socket)socket.evidence.status=response.status
+  })
+  session.on('Network.webSocketFrameError',({requestId})=>{
+    const socket=sockets.get(requestId);if(socket)socket.evidence.error=true
+  })
+  session.on('Network.webSocketFrameSent',({requestId,response})=>{
+    const socket=sockets.get(requestId);if(!socket||response.payloadData.length>64*1024)return
+    try{
+      const frame=JSON.parse(response.payloadData)
+      if(frame?.method==='ledger.getFrontierMomentum'&&Number.isSafeInteger(frame.id)){
+        if(socket.frontiers.size>=128){errors.push('Compiled browser exceeded the pending frontier evidence bound');return}
+        socket.frontiers.add(frame.id)
+      }
+    }catch{/* Only paired frontier identities are retained. */}
+  })
+  session.on('Network.webSocketFrameReceived',({requestId,response})=>{
+    const socket=sockets.get(requestId);if(!socket||response.payloadData.length>64*1024)return
+    try{
+      const frame=JSON.parse(response.payloadData)
+      if(!socket.frontiers.delete(frame?.id))return
+      const momentum=frame.result
+      if(!frame.error&&Number.isSafeInteger(momentum?.chainIdentifier)&&Number.isSafeInteger(momentum?.height)&&/^[0-9a-f]{64}$/i.test(momentum?.hash))socket.evidence.frontier={chainId:momentum.chainIdentifier,height:momentum.height}
+    }catch{/* Malformed or unrelated frames cannot establish readiness. */}
+  })
+  session.on('Network.webSocketClosed',({requestId})=>{
+    const socket=sockets.get(requestId);if(socket){socket.evidence.closed=true;socket.frontiers.clear()}
+  })
   await page.exposeFunction('__labPolicyViolation',(directive:string)=>violations.push(directive))
   await page.evaluateOnNewDocument(()=>document.addEventListener('securitypolicyviolation',(event)=>(window as any).__labPolicyViolation(event.effectiveDirective)))
   await page.setRequestInterception(true)
@@ -42,13 +82,14 @@ beforeAll(async()=>{
   page.on('response',(response)=>{const url=new URL(response.url());if(url.origin===origin&&url.pathname.endsWith('.js'))scripts.add(url.pathname)})
   await page.goto(origin,{waitUntil:'networkidle0'})
   await page.waitForFunction(()=>document.body.innerText.includes('Anvil'),{timeout:60_000})
+  await expect.poll(()=>socketEvidence.some((socket)=>socket.allowed&&socket.status===101&&!socket.error&&!socket.closed&&socket.frontier?.chainId===322&&socket.frontier.height>=20),{timeout:60_000}).toBe(true)
   initialScripts=[...scripts].sort()
 })
 afterAll(async()=>{
   const report={mode:'isolated read-only production bundle',network:'devnet',sourceCommit:execFileSync('git',['rev-parse','HEAD']).toString().trim(),
     sourceTree:execFileSync('git',['rev-parse','HEAD^{tree}']).toString().trim(),lockfileHash:sha(fs.readFileSync('package-lock.json')),
     sourceDirty:execFileSync('git',['status','--porcelain']).toString().trim().length>0,browserVersion:await browser?.version(),errors,outbound,violations,
-    initialScripts:initialScripts.map((name)=>{const bytes=fs.readFileSync(path.join(outDir,name));return {name,bytes:bytes.length,gzipBytes:gzipSync(bytes).length,sha256:sha(bytes)}}),loadedScriptNames:[...scripts].sort(),noticeEvidence}
+    initialScripts:initialScripts.map((name)=>{const bytes=fs.readFileSync(path.join(outDir,name));return {name,bytes:bytes.length,gzipBytes:gzipSync(bytes).length,sha256:sha(bytes)}}),loadedScriptNames:[...scripts].sort(),noticeEvidence,socketEvidence}
   fs.mkdirSync('.browser-results',{recursive:true});fs.writeFileSync('.browser-results/built-report.json',JSON.stringify(report,null,2)+'\n')
   await browser?.close();await new Promise<void>((resolve)=>server?.httpServer.close(()=>resolve())??resolve())
 })
