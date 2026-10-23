@@ -14,6 +14,7 @@ const outDir='e2e/.state/browser-build', origin='http://127.0.0.1:5195'
 let server: PreviewServer, browser: Browser, page: Page
 const errors:string[]=[], outbound:string[]=[], scripts=new Set<string>(), violations:string[]=[]
 let initialScripts:string[]=[]
+let noticeEvidence={verified:false,packages:0,files:0,manifestSha256:''}
 const sha=(data:Buffer)=>crypto.createHash('sha256').update(data).digest('hex')
 beforeAll(async()=>{
   await assertLab()
@@ -47,7 +48,7 @@ afterAll(async()=>{
   const report={mode:'isolated read-only production bundle',network:'devnet',sourceCommit:execFileSync('git',['rev-parse','HEAD']).toString().trim(),
     sourceTree:execFileSync('git',['rev-parse','HEAD^{tree}']).toString().trim(),lockfileHash:sha(fs.readFileSync('package-lock.json')),
     sourceDirty:execFileSync('git',['status','--porcelain']).toString().trim().length>0,browserVersion:await browser?.version(),errors,outbound,violations,
-    initialScripts:initialScripts.map((name)=>{const bytes=fs.readFileSync(path.join(outDir,name));return {name,bytes:bytes.length,gzipBytes:gzipSync(bytes).length,sha256:sha(bytes)}}),loadedScriptNames:[...scripts].sort()}
+    initialScripts:initialScripts.map((name)=>{const bytes=fs.readFileSync(path.join(outDir,name));return {name,bytes:bytes.length,gzipBytes:gzipSync(bytes).length,sha256:sha(bytes)}}),loadedScriptNames:[...scripts].sort(),noticeEvidence}
   fs.mkdirSync('.browser-results',{recursive:true});fs.writeFileSync('.browser-results/built-report.json',JSON.stringify(report,null,2)+'\n')
   await browser?.close();await new Promise<void>((resolve)=>server?.httpServer.close(()=>resolve())??resolve())
 })
@@ -56,6 +57,27 @@ it('loads compiled routes under the declared CSP without development stores or a
   expect(await page.evaluate(()=>(window as any).__bridge)).toBeUndefined()
   expect(await page.$eval('meta[http-equiv="Content-Security-Policy"]',(element)=>element.getAttribute('content'))).toContain("script-src 'self'")
   expect(errors).toEqual([]);expect(outbound).toEqual([]);expect(violations).toEqual([])
+})
+
+it('retains exact locked dependency and font notice bytes in the compiled distribution',()=>{
+  const lockBytes=fs.readFileSync('package-lock.json'),lock=JSON.parse(lockBytes.toString())
+  const noticeBytes=fs.readFileSync(path.join(outDir,'third-party-notices/manifest.json')),manifest=JSON.parse(noticeBytes.toString())
+  const expected=Object.entries(lock.packages).filter(([name,entry])=>name&&!(entry as any).dev).map(([name])=>name).sort()
+  expect(manifest.lockfileSha256).toBe(sha(lockBytes))
+  expect(manifest.packages.map((p:any)=>p.packagePath).sort()).toEqual(expected)
+  expect(manifest.packages.filter((p:any)=>p.name.startsWith('@fontsource-variable/')).every((p:any)=>p.license==='OFL-1.1')).toBe(true)
+  let count=0
+  for(const pkg of manifest.packages){
+    expect(pkg.version).toBe(lock.packages[pkg.packagePath].version)
+    expect(pkg.notices.length).toBeGreaterThan(0)
+    for(const notice of pkg.notices){
+      expect(path.isAbsolute(notice.output)||notice.output.split('/').includes('..')).toBe(false)
+      expect(notice.source.startsWith(pkg.packagePath+'/')).toBe(true)
+      const bytes=fs.readFileSync(path.join(outDir,'third-party-notices',notice.output))
+      expect(sha(bytes)).toBe(notice.sha256);expect(bytes).toEqual(fs.readFileSync(notice.source));count++
+    }
+  }
+  noticeEvidence={verified:true,packages:manifest.packages.length,files:count,manifestSha256:sha(noticeBytes)}
 })
 
 it('keeps compiled views within a mobile viewport with disconnected wallets',async()=>{

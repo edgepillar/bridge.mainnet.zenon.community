@@ -4,7 +4,9 @@ The [locked dependency notice inventory](DEPENDENCY_LICENSES.json) records insta
 package versions, declared license fields and notice-file digests without author or
 machine metadata. It is a review input for the [acceptance protocol](ACCEPTANCE.md),
 not a bundle composition claim, replacement notice or grant of root licensing
-authority. Preserve the actual applicable notice texts in an accepted distribution.
+authority. Every production build now preserves exact locked dependency/font notice
+texts and their digests in `third-party-notices/`; retain that directory in an
+accepted distribution. See [MAINTENANCE.md](MAINTENANCE.md) for scope and validation.
 
 The application contains reconstructed bridge functionality and reused Zenon primitives/ABI/block and wallet adapter code. The existing headers identify origins including `zenon-ptlc/lab/web`, the earlier bridge deployment, `zenon-faucet`, the Syrius adapter, go-zenon consensus code and the HyperCore orchestrator message layouts. Those descriptions are provenance leads, not a grant of authority over missing source or a root license.
 

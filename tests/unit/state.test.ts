@@ -200,3 +200,62 @@ describe('EVM connection ownership', () => {
     expect(evm.account).toBeNull(); expect(evm.chainId).toBeNull()
   })
 })
+
+describe('health refresh and durable activity outcomes', () => {
+  it('records sampled health and closes health authority after a failed refresh', async () => {
+    const a = fixture(); a.unsignedWraps.mockResolvedValue({ count: 101, list: [wrap()] } as any)
+    await prepare(a)
+    const { bridge, loadHealth, transferHealthWarning } = await import('../../src/state/bridge.ts')
+    await loadHealth(); expect(bridge.unsignedCount).toBe(101); expect(bridge.healthSampled).toBe(true); expect(bridge.healthAt).toBeGreaterThan(0)
+    a.unsignedWraps.mockRejectedValue(new Error('current health unavailable')); await loadHealth()
+    expect(bridge.healthAt).toBe(0); expect(transferHealthWarning()).toContain('unavailable')
+  })
+  it('does not apply a late old health response after invalidation', async () => {
+    const a = fixture(), gate = deferred<any>(); a.unsignedWraps.mockImplementation(() => gate.promise)
+    await prepare(a); const { bridge, loadHealth, invalidateBridge } = await import('../../src/state/bridge.ts')
+    const pending = loadHealth(); invalidateBridge(); gate.resolve({ count: 0, list: [] }); await pending
+    expect(bridge.loaded).toBe(false); expect(bridge.health).toBeNull(); expect(bridge.healthAt).toBe(0)
+  })
+  it('keeps an unindexed original wrap and rejects malformed local records without saving them', async () => {
+    const a = fixture(); await prepare(a)
+    const { remember, refreshActivity, activity, pendingCount } = await import('../../src/state/activity.ts')
+    const record = { kind: 'wrap' as const, id: wrap().id, chainId: 1, from: zAccount, toAddress: eth, tokenStandard: zts, amount: '97', createdAt: 1 }
+    remember(record); await refreshActivity()
+    expect(a.wrapById).toHaveBeenCalledWith(record.id); expect(activity.items[0]).toMatchObject({ sourceTx: record.id, status: { state: 'confirming' } }); expect(pendingCount()).toBe(1)
+    const saved = localStorage.getItem('bridge.activity.v2')
+    expect(() => remember({ ...record, amount: '-1' })).toThrow('Invalid'); expect(localStorage.getItem('bridge.activity.v2')).toBe(saved)
+  })
+  it('recovers only the exact stored unwrap hash and log index', async () => {
+    const a = fixture(), txHash = 'cd'.repeat(32)
+    a.unwrapByHashAndLog.mockResolvedValue({ networkClass: 2, chainId: 1, transactionHash: txHash, logIndex: 7, toAddress: zAccount,
+      tokenAddress: eth, tokenStandard: zts, amount: 97n, registrationMomentumHeight: 50, signature: 'fixture-signature', redeemableIn: 0, redeemed: 0, revoked: 0, token } as any)
+    await prepare(a); const { remember, refreshActivity, activity, actionCount } = await import('../../src/state/activity.ts')
+    remember({ kind: 'unwrap', txHash: '0x' + txHash, logIndex: 7, chainId: 1, from: eth, toAddress: zAccount, tokenAddress: eth, amount: '97', createdAt: 1 })
+    await refreshActivity(); expect(a.unwrapByHashAndLog).toHaveBeenCalledWith('0x' + txHash, 7)
+    expect(activity.items[0]).toMatchObject({ sourceTx: txHash, unwrap: { logIndex: 7 }, amount: 97n }); expect(actionCount()).toBe(1)
+  })
+  it('does not discover a replacement hash when the original unwrap receipt is unavailable', async () => {
+    await prepare(); mock.reader.getTransactionReceipt = vi.fn(async () => { throw new Error('original receipt unavailable') })
+    const { remember, refreshActivity, activity } = await import('../../src/state/activity.ts')
+    const txHash = '0x' + 'cd'.repeat(32)
+    remember({ kind: 'unwrap', txHash, chainId: 1, from: eth, toAddress: zAccount, tokenAddress: eth, amount: '97', createdAt: 1 })
+    await refreshActivity(); expect(activity.items[0]).toMatchObject({ sourceTx: txHash, status: { state: 'signing' } }); expect(activity.local[0]).not.toHaveProperty('logIndex')
+    expect(mock.reader.getTransactionReceipt).toHaveBeenCalledWith({ hash: txHash })
+  })
+  it('deduplicates watched addresses and clears rows when the selected history context changes', async () => {
+    const a = fixture(); a.wrapsTo.mockResolvedValue({ count: 1, list: [wrap()] }); await prepare(a)
+    const { activity, setWatched, refreshActivity, startActivity } = await import('../../src/state/activity.ts')
+    setWatched([eth, eth, 'invalid']); await refreshActivity(); expect(activity.watched).toEqual([eth]); expect(activity.items).toHaveLength(1)
+    scope = effectScope(); scope.run(startActivity); setWatched([]); await refreshActivity(); expect(activity.items).toEqual([])
+    const { node } = await import('../../src/state/zenon.ts'); node.tick++; await nextTick(); await refreshActivity(); expect(activity.error).toBe('')
+  })
+  it('marks only the exact completed request terminal after a fresh destination read', async () => {
+    const a = fixture(); a.wrapsTo.mockResolvedValue({ count: 1, list: [{ ...wrap(), signature: 'signed' }] })
+    const original = mock.reader.readContract.getMockImplementation()!
+    mock.reader.readContract.mockImplementation((args: any) => args.functionName === 'redeemsInfo' ? Promise.resolve([(1n << 256n) - 1n, '0x' + '00'.repeat(32)]) : original(args))
+    await prepare(a); const { remember, activity, refreshActivity } = await import('../../src/state/activity.ts')
+    remember({ kind: 'wrap', id: wrap().id, chainId: 1, from: zAccount, toAddress: eth, tokenStandard: zts, amount: '97', createdAt: 1 }); await refreshActivity()
+    expect(activity.items[0].status.state).toBe('done'); expect(activity.local[0]).toMatchObject({ id: wrap().id, terminal: true })
+    expect(JSON.parse(localStorage.getItem('bridge.activity.v2')!)[0].id).toBe(wrap().id)
+  })
+})
