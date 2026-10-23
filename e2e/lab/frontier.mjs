@@ -28,7 +28,7 @@ async function frontier() {
   const reply = await res.json()
   if (!res.ok) throw new Error(`Readiness HTTP ${res.status}`)
   if (reply.error) throw new Error(reply.error.message)
-  if (reply.result?.chainIdentifier !== 322) throw new Error('Unexpected Zenon chain identity')
+  if (reply.result?.chainIdentifier !== 322 || !Number.isSafeInteger(reply.result?.height) || reply.result.height < 1) throw new Error('Unexpected Zenon frontier identity')
   return reply.result
 }
 const pause = (s) => new Promise((r) => setTimeout(r, s * 1000))
@@ -54,6 +54,7 @@ while (second.height === first.height && Date.now() - started < patience * 1000)
   second = await frontier().catch(() => second)
 }
 const moved = second.height - first.height
+let qualified = moved > 0
 console.log(`chain ${second.chainIdentifier}: ${first.height} then ${second.height} after ${Math.round((Date.now() - started) / 1000)} s`)
 console.log(moved > 0 ? 'producing' : 'NOT producing')
 if (args.includes('--native') || args.includes('--docker')) {
@@ -67,7 +68,7 @@ if (args.includes('--native') || args.includes('--docker')) {
   const reportDirectory = new URL(`./.build/${mode}/`, import.meta.url)
   fs.mkdirSync(reportDirectory, { recursive: true })
   const report = { schema: 1, sourceCommit: execFileSync('git', ['rev-parse', 'HEAD']).toString().trim(), sourceTree: execFileSync('git', ['rev-parse', 'HEAD^{tree}']).toString().trim(), status: 'WAITING',
-    minimumHeight: 20, depth: 3, requiredSamples: 3, windowSeconds: 600, rounds: [] }
+    minimumHeight: 20, depth: 3, requiredSamples: 3, windowSeconds: 600, initialHeight: first.height, warmupHeight: second.height, rounds: [] }
   const record = () => fs.writeFileSync(new URL('readiness-report.json', reportDirectory), JSON.stringify(report, null, 2) + '\n')
   let agreed = 0
   while (agreed < 3) {
@@ -87,14 +88,17 @@ if (args.includes('--native') || args.includes('--docker')) {
           momentum: momentum && { height: momentum.height, chainIdentifier: momentum.chainIdentifier, hash: momentum.hash }, error: null }
       } catch { return { port, height: null, chainId: null, momentum: null, error: 'READ_UNAVAILABLE' } }
     }))
-    const matches = readyAtFrontier(frontierNow, nodes)
+    // The short diagnostic can end before cold startup finishes. Require actual
+    // progress since the original frontier as well as every convergence check.
+    const matches = frontierNow.height > first.height && readyAtFrontier(frontierNow, nodes)
     agreed = matches ? agreed + 1 : 0
     report.rounds.push({ elapsedMs: Date.now() - readinessStarted, anchorHeight: frontierNow.height, targetHeight, agreed, nodes })
     record()
     if (Date.now() > end) { report.status = 'FAILURE'; record(); throw new Error('Lab nodes did not converge within the qualification window; inspect readiness-report.json') }
     if (agreed < 3) await pause(10)
   }
-  report.status = moved > 0 ? 'SUCCESS' : 'FAILURE'; record()
+  qualified = true
+  report.status = 'SUCCESS'; record()
   console.log(`Five ${mode} nodes agree on recent momentum hashes; fixture writes may begin.`)
 }
-process.exit(moved > 0 ? 0 : 1)
+process.exit(qualified ? 0 : 1)
