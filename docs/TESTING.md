@@ -45,6 +45,7 @@ themselves.
 | `evm-wallet.test.ts` | EIP-6963 discovery, chain/account changes, late initial replies, network switching and silent reconnect ownership |
 | `evm-transactions.test.ts` | Original EVM submission/receipt orchestration, reader/hash/reorg/revert failures and retained uncertain outcomes |
 | `zenon-session.test.ts` | Selected-node probes, wallet-node consent and restoration, late sessions, original publications and unbiased momentum timing samples |
+| `frontier-cli.test.ts` | Actual CLI exit/report behavior with fixture-only transport: cold startup, original-frontier progress, stalled/divergent nodes and malformed identities |
 
 ## Deterministic source checks
 
