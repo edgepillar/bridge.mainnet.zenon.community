@@ -75,6 +75,54 @@ restored on a later visit only while Syrius still names that node and the node
 is still on that chain; otherwise the page goes back to the default and says so.
 
 
+## Any chain
+
+Nothing is tied to chain 1. On whichever chain the node is on, the page reads
+the embedded bridge contract for its networks, EVM bridge addresses, token
+pairs, fees and delays, and builds account blocks with that chain's identifier.
+What the chain cannot say is skipped off the build's own chain: explorer links,
+the plasma bot and the Uniswap pool. An EVM chain the build has no RPC for is
+read through the connected EVM wallet once it is on that chain. Transfers
+remembered in the browser carry their Zenon chain identifier and show only on
+that chain.
+
+## Orchestrator status
+
+There is no public orchestrator monitor any more (status.bridge.zenon.community
+is gone), and the orchestrators' own health endpoints are private. The status
+is derived from the chain:
+
+- Orchestrators send `UpdateWrapRequest` and `UnwrapToken` from their pillar's
+  producer address, rotating by request id. The bridge contract's receive
+  blocks show who sent each one and when. Mapping producers to pillars gives
+  "seen signing".
+- `getAllUnsignedWrapTokenRequests` lists wraps without a signature. One past
+  finality for six hours means the ceremony is not happening.
+
+The verdict, in order: halted, key generation, stalled (6 h), delayed (1 h),
+online (a signature in the last 24 h), idle. Halted, key generation and
+stalled show the red banner on every page. The Advanced "Send anyway" switch
+overrides only a health warning; halted contracts and configuration/identity
+guards still block writes. Thresholds are in `src/core/orchestrators.ts`.
+
+## Writes
+
+Every write is signed by the user's wallet.
+
+| Action | Wallet | Call |
+|---|---|---|
+| Wrap | Syrius | send to the bridge contract, `WrapToken(class, chainId, to)` |
+| Redeem a wrap | EVM | `redeem(to, token, amount - fee, id, sig)` twice, `redeemDelay` blocks apart |
+| Unwrap | EVM | `approve` if short, then `unwrap(token, amount, "z1…[&z1referrer]")` |
+| Redeem an unwrap | Syrius | `Redeem(txHash, logIndex)` |
+| Stake LP | Syrius | send to the liquidity contract, `LiquidityStake(seconds)` |
+| Revoke, collect | Syrius | `CancelLiquidityStake(id)`, `CollectReward()` |
+| Add liquidity | EVM | `approve`, `addLiquidityETH` on the Uniswap V2 router |
+| Swap | EVM | `approve` if short, then the selected router's quoted transaction, to that router |
+
+A redeem simulates first, so bridge.sol's revert reason ("not redeemable yet",
+"nonce already redeemed") is shown instead of a failed transaction.
+
 ## Publication ownership
 
 A hashless `unknown` record can be explicitly reviewed after at least one minute,
@@ -108,7 +156,7 @@ New stakes are paused when rewards are zero. A successful source transaction doe
 
 ## Browser and deployment
 
-Views and reconciliation load lazily. Fonts, scripts and icons are local. Hash routes support static hosting. Navigation adapts below desktop width; nested dialogs own focus/Escape, make the background inert and restore focus/scroll. Reduced-motion preferences are honored.
+Views and reconciliation load lazily. Fonts, scripts and icons are local. Hash routes support static hosting. Navigation adapts below desktop width; nested dialogs own focus/Escape, make the background inert and restore focus/scroll. The starfield keeps animating as the chain indicator; this follows the design rules below.
 
 The HTML declares CSP/referrer policy; the legacy affiliate landing page accepts only same-origin destinations without userinfo. Framing and transport headers require hosting-owner configuration. See [deployment gates](DEPLOY.md), [recovery](RECOVERY.md), [testing](TESTING.md), [support](SUPPORT.md) and [provenance](PROVENANCE.md).
 
@@ -208,8 +256,9 @@ An Across quote is good for about half a minute, so it is usually asked for
 again on send; a worse one is shown before anything is signed. KyberSwap
 refuses a few well-known addresses, anvil's first account among them, and such
 a sender falls back to LI.FI. A swap is not a bridge request, so Activity does
-not list it: it is followed with toasts in the tab that sent it, and a reload
-loses that.
+not list it: toasts show progress in the sending tab. Its original source payload and hash
+remain in the durable journal after reload; receiving-chain status still needs
+separate canonical evidence.
 
 ## Prices
 
@@ -224,3 +273,44 @@ numbers.
 ## Router qualification boundary
 
 The price comparisons above are dated upstream observations, not a new qualification result. Router calldata and cross-chain status remain external-service assertions. A source transaction receipt alone does not establish delivery on the receiving chain. The original-operation journal and receipt validation apply to swap approvals and sends; real router, wallet and destination outcomes require separate acceptance.
+
+## Design
+
+Zenon design tokens transcribed into `src/style.css` (Tailwind 4, CSS-first),
+self-hosted Space Grotesk and JetBrains Mono, Lucide icons. Rules from
+`webdesign-lab/RULES.md`: amounts and ids mono and tabular, status as icon plus
+word, the plasma gradient once per view on the main action, light and dark, one
+700 px breakpoint, 44 px hit areas, nothing from a CDN, and motion that always
+runs.
+
+The shape is the owner's brief of 2026-10-12, after stargate.finance, and it
+is written down as `webdesign-lab/RULES.md` section 11, "The transfer shape",
+so that a refactor of this app or a new app of the same kind keeps it. In
+short:
+
+- Glass cards (24 px radius, 88% surface, 10 px blur) over a seeded canvas
+  starfield that the pointer lights; controls 14 px, buttons full pills.
+- One 440 px column: a From card and a To card with a round reverse button on
+  the seam, the amount mono at 30 px, a dollar estimate under each.
+- Every token icon carries its chain's badge. A picker row is one asset on one
+  chain; each side has its own picker, with no filters, and a valid default
+  pair is always selected.
+- A Bridge or Swap toggle above the form, a segmented pill, that narrows the
+  pickers and the banners to the mode.
+- One main button that says what is missing, then the action. Cost and steps
+  in a collapsed Details list. Rare controls behind Advanced and the wallet
+  menu.
+- Every error goes through `src/core/errors.ts` before it is shown: a few
+  plain words, "Declined in wallet" for any refusal.
+
+
+## Decisions
+
+| Decision | Why |
+|---|---|
+| No znn-ts-sdk | It pulls ethers 5 and Node polyfills; the noble-based primitives from the ptlc lab are a few hundred lines |
+| WebSocket to the node | Public nodes speak it, it carries the subscription, and it needs no CORS preflight |
+| Hash routes | Pages has no SPA fallback |
+| Large integers parsed as strings | go-zenon sends some amounts as bare JSON numbers past 2^53 (`parseJsonSafe`) |
+| Referral suffix is the decoded address | The orchestrator parses it as an address; the original sent the mangled code on a first visit |
+| `affiliate.html` follows only http(s) | The original followed any `originURL`, including `javascript:` |

@@ -6,10 +6,10 @@
 //
 // A chain that has stopped still answers, so one read proves nothing. `--wait`
 // keeps trying until the node answers at all, for the minutes after `up`.
-// Native qualification additionally requires five exact-height hash matches.
+// Native and Docker qualification require five exact-height hash matches.
 import fs from 'node:fs'
 import { execFileSync } from 'node:child_process'
-import { agreesAtHeight } from './readiness.mjs'
+import { readyAtFrontier } from './readiness.mjs'
 const args = process.argv.slice(2)
 const waitAt = args.indexOf('--wait')
 const wait = waitAt >= 0 ? Number(args.splice(waitAt, 2)[1]) : 0
@@ -56,16 +56,19 @@ while (second.height === first.height && Date.now() - started < patience * 1000)
 const moved = second.height - first.height
 console.log(`chain ${second.chainIdentifier}: ${first.height} then ${second.height} after ${Math.round((Date.now() - started) / 1000)} s`)
 console.log(moved > 0 ? 'producing' : 'NOT producing')
-if (args.includes('--native')) {
+if (args.includes('--native') || args.includes('--docker')) {
   // Production is insufficient: require convergence across the five nodes at
   // an agreed recent height, after a startup window. Never skip this in CI.
   // The observed passing Linux warmup consumed 261 s of the old 300 s
   // budget. Allow bounded startup headroom while retaining every predicate.
   const end = Date.now() + 600_000
-  const nativeStarted = Date.now()
+  const readinessStarted = Date.now()
+  const mode = args.includes('--docker') ? 'docker' : 'native'
+  const reportDirectory = new URL(`./.build/${mode}/`, import.meta.url)
+  fs.mkdirSync(reportDirectory, { recursive: true })
   const report = { schema: 1, sourceCommit: execFileSync('git', ['rev-parse', 'HEAD']).toString().trim(), sourceTree: execFileSync('git', ['rev-parse', 'HEAD^{tree}']).toString().trim(), status: 'WAITING',
     minimumHeight: 20, depth: 3, requiredSamples: 3, windowSeconds: 600, rounds: [] }
-  const record = () => fs.writeFileSync(new URL('./.build/native/readiness-report.json', import.meta.url), JSON.stringify(report, null, 2) + '\n')
+  const record = () => fs.writeFileSync(new URL('readiness-report.json', reportDirectory), JSON.stringify(report, null, 2) + '\n')
   let agreed = 0
   while (agreed < 3) {
     const frontierNow = await frontier()
@@ -84,14 +87,14 @@ if (args.includes('--native')) {
           momentum: momentum && { height: momentum.height, chainIdentifier: momentum.chainIdentifier, hash: momentum.hash }, error: null }
       } catch { return { port, height: null, chainId: null, momentum: null, error: 'READ_UNAVAILABLE' } }
     }))
-    const matches = frontierNow.height >= 20 && agreesAtHeight(nodes.map((n) => n.momentum), targetHeight)
+    const matches = readyAtFrontier(frontierNow, nodes)
     agreed = matches ? agreed + 1 : 0
-    report.rounds.push({ elapsedMs: Date.now() - nativeStarted, anchorHeight: frontierNow.height, targetHeight, agreed, nodes })
+    report.rounds.push({ elapsedMs: Date.now() - readinessStarted, anchorHeight: frontierNow.height, targetHeight, agreed, nodes })
     record()
-    if (Date.now() > end) { report.status = 'FAILURE'; record(); throw new Error('Native nodes did not converge within the qualification window; inspect readiness-report.json') }
+    if (Date.now() > end) { report.status = 'FAILURE'; record(); throw new Error('Lab nodes did not converge within the qualification window; inspect readiness-report.json') }
     if (agreed < 3) await pause(10)
   }
   report.status = moved > 0 ? 'SUCCESS' : 'FAILURE'; record()
-  console.log('Five native nodes agree on recent momentum hashes; fixture writes may begin.')
+  console.log(`Five ${mode} nodes agree on recent momentum hashes; fixture writes may begin.`)
 }
 process.exit(moved > 0 ? 0 : 1)

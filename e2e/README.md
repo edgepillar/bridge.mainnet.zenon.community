@@ -31,4 +31,19 @@ npm run lab:down
 
 Docker pins the Go/runtime/Anvil images by digest. `lab.sh` verifies the built image and overlay identities before reuse. `npm run lab:wipe` explicitly deletes only this lab's generated assets and named volumes. Archive evidence first. The Docker path needs independent qualification on a host with a running Docker daemon; a native pass does not prove Docker passed.
 
+`lab:up` waits for the same readiness barrier as native mode: minimum height 20,
+depth three and three consecutive five-node agreements on recent momentum hashes.
+The extra node RPC ports 47100-47103 bind only to loopback. Docker build/runtime
+image pairing and readiness are recorded in `.build/manifest.json` and
+`.build/docker/{run-manifest,readiness-report}.json`. Qualification has a separate
+Docker job that starts with no chain assets or fixture publication, then runs all
+three E2E files. Its result remains separate from the native job.
+
+A known pre-publication validation rejection archives the matching signed fixture
+under `e2e/.state/rejected/` and releases its pending slot. The startup cache error
+must name that block's exact acknowledged momentum. Network/timeouts, malformed
+responses, internal and unclassified RPC errors keep `publication.json` and its
+original hash. There is no automatic resend, replacement signature or cleanup of
+old lab state.
+
 The genesis generator backs every declared QSR fusion while preserving total supply; index 1 has 10,000 ZNN and 70,000 spendable QSR plus its fused QSR. Setup deploys/configures the lab bridge/token, and the suites exercise wrap, delayed two-step EVM redemption, unwrap/referral, Zenon redemption and UI behavior. See [qualification boundaries](../docs/QUALIFICATION.md) and [release gates](../docs/DEPLOY.md).

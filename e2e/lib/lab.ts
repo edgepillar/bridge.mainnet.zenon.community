@@ -10,6 +10,7 @@ import { privateKeyToAccount } from 'viem/accounts'
 import { keccak256, toBytes } from 'viem'
 import { Account } from './wallet.ts'
 import { publishBlock } from './publish.ts'
+import { archiveRejectedPublication } from './publication-journal.ts'
 import { ZenonClient } from '../../src/znn/client.ts'
 import { ZenonApi } from '../../src/znn/api.ts'
 import type { BlockSpec } from '../../src/znn/block.ts'
@@ -126,10 +127,17 @@ export function send(spec: BlockSpec, account: Account = zAdmin): Promise<string
       if (pending.identity !== identity || pending.block.chainIdentifier !== ZNN_CHAIN_ID || pending.block.address !== account.address) throw new Error('Earlier fixture publication is unresolved; retain and reconcile its exact hash')
       block = pending.block
     } else {
-      block = await publishBlock(znn, account, ZNN_CHAIN_ID, spec, {}, (prepared) => {
-        fs.mkdirSync(fileURLToPath(new URL('../.state/', import.meta.url)), { recursive: true })
-        fs.writeFileSync(publicationFile, JSON.stringify({ identity, block: prepared }), { flag: 'wx' })
-      })
+      let preparedBlock: BlockJson | undefined
+      try {
+        block = await publishBlock(znn, account, ZNN_CHAIN_ID, spec, {}, (prepared) => {
+          fs.mkdirSync(fileURLToPath(new URL('../.state/', import.meta.url)), { recursive: true })
+          fs.writeFileSync(publicationFile, JSON.stringify({ identity, block: prepared }), { flag: 'wx' })
+          preparedBlock = prepared
+        })
+      } catch (error) {
+        if (preparedBlock) archiveRejectedPublication(publicationFile, identity, preparedBlock, error)
+        throw error
+      }
     }
     await until(`block ${block.hash.slice(0, 8)} to confirm`, async () => {
       const b = await znn.callOrNull<ConfirmedBlock>('ledger.getAccountBlockByHash', [block.hash])
