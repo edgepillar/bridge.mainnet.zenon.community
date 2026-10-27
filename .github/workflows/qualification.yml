@@ -34,6 +34,45 @@ jobs:
           path: dist
           include-hidden-files: true
           retention-days: 14
+  browser-transport:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26.5.0
+          cache: npm
+      - run: npm ci
+      - name: Install and sandbox the pinned browser
+        run: |
+          mkdir -p .lab-tools
+          node_modules/.bin/browsers install chrome-headless-shell@155.0.8059.39 --path .lab-tools
+          browser_path=$(find .lab-tools -type f -name chrome-headless-shell -print -quit)
+          test -n "$browser_path"
+          browser_path="$GITHUB_WORKSPACE/$browser_path"
+          test -x "$browser_path"
+          printf 'CHROME_PATH=%s\n' "$browser_path" >> "$GITHUB_ENV"
+          printf '%s\n' \
+            'abi <abi/4.0>,' \
+            'include <tunables/global>' \
+            "profile bridge-qualification-browser \"$browser_path\" flags=(unconfined) {" \
+            '  userns,' \
+            '}' > .lab-tools/browser.apparmor
+          sudo install -m 0644 .lab-tools/browser.apparmor /etc/apparmor.d/bridge-qualification-browser
+          sudo apparmor_parser --replace /etc/apparmor.d/bridge-qualification-browser
+      - name: Exercise bounded fresh-browser transport starts
+        run: node --experimental-strip-types e2e/browser-transport-probe.mjs
+      - name: Retain sanitized browser transport evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: browser-transport-evidence
+          path: .browser-results/transport-probe-report.json
+          include-hidden-files: true
+          retention-days: 14
   docker-lab:
     runs-on: ubuntu-24.04
     timeout-minutes: 35

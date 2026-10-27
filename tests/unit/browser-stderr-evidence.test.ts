@@ -68,3 +68,19 @@ it('leaves missing browser stderr unavailable without fabricating a clean observ
   expect(evidence.report().status).toBe('UNAVAILABLE')
   expect(evidence.report().bytesInspected).toBe(0)
 })
+
+it('reduces source-backed fatal and Mojo markers to counts without raw diagnostic text',()=>{
+ const e=browserStderrEvidence()
+ e.ingest('[987654:12:FATAL:net/websockets/websocket_basic_stream.cc:359] Check failed: frames->empty(). PRIVATE_VALUE\n')
+ e.ingest('[987654:12:FATAL:base/process/memory.cc(188)] Out of memory. PRIVATE_PATH\n')
+ e.ingest('[987654:12:WARNING:services/network/network_service.cc:239] Mojo error in NetworkService: PRIVATE_TOKEN\n')
+ expect(e.report().fatalMessages).toBe(2);expect(e.report().outOfMemoryMessages).toBe(1)
+ expect(e.report().websocketFrameVectorChecks).toBe(1);expect(e.report().mojoErrorMessages).toBe(1)
+ expect(JSON.stringify(e.report())).not.toMatch(/PRIVATE|987654|websocket_basic_stream/)
+})
+it('records fixed signal numbers without claiming a platform-independent signal name',()=>{
+ const e=browserStderrEvidence();e.ingest('Received signal 11 PRIVATE_ADDRESS\nReceived signal 31 PRIVATE_ADDRESS\nReceived signal 99 PRIVATE_ADDRESS\n')
+ expect(e.report().signalNumbers['11']).toBe(1);expect(e.report().signalNumbers['31']).toBe(1)
+ expect(Object.values(e.report().signalNumbers).reduce((a,b)=>a+b,0)).toBe(2)
+ expect(JSON.stringify(e.report())).not.toContain('PRIVATE')
+})

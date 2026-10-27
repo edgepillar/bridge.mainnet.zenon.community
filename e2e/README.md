@@ -187,3 +187,24 @@ and stream SHA-256/byte/completeness facts enter `downloader-control-report.json
 Raw command output and stack data stay outside uploaded artifacts. A failure
 remains fatal. Current-source Linux/native/Docker evidence is required separately
 from the completed Darwin package control and any earlier successful cold case.
+## Browser utility-exit investigation
+
+The `browser-transport` CI job uses the same pinned sandboxed Chromium for 48
+fresh browser starts. It varies complete messages, empty final continuations,
+separately scheduled final continuations and request interception. Complete
+messages are serialized on the synthetic loopback server. Each start must receive
+all 13 valid JSON replies and keep its socket open during the observation window.
+Socket or console errors, unexpected service replacement and incomplete controls
+fail the job. It sends no injected signals and uses no wallet or chain.
+
+The report binds source/tree/file/lock/runtime identities and retains fixed
+utility-termination, stderr and hierarchical cgroup-memory facts. Raw lines,
+identifiers, profiles and paths are excluded. The cgroup counters cover the whole
+hierarchy; utility counters cover all utilities. Neither alone identifies a
+particular process or establishes why it exited. Current compiled native/Docker
+checks also capture memory facts after a transport error, before browser teardown.
+
+This bounded experiment investigates the preserved natural network-service
+replacement. A passing probe or injected calibration does not establish its cause
+or dispose of historical failures. The browser pin, fatal transport assertions,
+sandbox and five-node readiness requirements are unchanged.
