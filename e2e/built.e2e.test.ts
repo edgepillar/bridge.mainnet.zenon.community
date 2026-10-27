@@ -5,6 +5,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { gzipSync } from 'node:zlib'
+import type { Readable } from 'node:stream'
 import { afterAll, beforeAll, expect, it } from 'vitest'
 import { build, preview, type PreviewServer } from 'vite'
 import puppeteer, { type Browser, type Page } from 'puppeteer-core'
@@ -12,6 +13,7 @@ import { assertLab } from './lib/lab.ts'
 import { socketFailureClass } from './lib/socket-evidence.ts'
 import { summarizeNetLog, summarizeNativeLog } from './lib/transport-diagnostics.ts'
 import { browserProcessEvidence } from './lib/browser-process-evidence.ts'
+import { browserStderrEvidence } from './lib/browser-stderr-evidence.ts'
 
 const outDir='e2e/.state/browser-build', origin='http://127.0.0.1:5195'
 const netLogFile='e2e/.state/compiled-netlog.private.json'
@@ -21,6 +23,10 @@ let initialScripts:string[]=[]
 let noticeEvidence={verified:false,packages:0,files:0,manifestSha256:''}
 let processEvidence: Awaited<ReturnType<typeof browserProcessEvidence>>, browserRevision: string | null = null
 const pendingProcessEvidence: Promise<void>[] = []
+let stderrEvidence = browserStderrEvidence(false)
+let ownedBrowserStderr: Readable | null | undefined
+const captureBrowserStderr = (chunk: Buffer) => stderrEvidence.ingest(chunk)
+const captureBrowserStderrError = () => stderrEvidence.captureReadError()
 // Keep bounded transport facts, never handshake headers or raw RPC frames.
 const socketEvidence:{allowed:boolean;status:number|null;error:boolean;closed:boolean;frontier:{chainId:number;height:number}|null;
   createdMs:number;handshakeMs:number|null;errorMs:number|null;closedMs:number|null;frontierMs:number|null;failureClass:string|null;frontierRequests:number}[]=[]
@@ -36,6 +42,10 @@ beforeAll(async()=>{
   finally { if(previousNodeEnv===undefined)delete process.env.NODE_ENV;else process.env.NODE_ENV=previousNodeEnv }
   server=await preview({envDir:false,logLevel:'error',build:{outDir},preview:{host:'127.0.0.1',port:5195,strictPort:true}})
   browser=await puppeteer.launch({executablePath:process.env.CHROME_PATH,headless:true,args:['--log-net-log='+path.resolve(netLogFile)]})
+  ownedBrowserStderr=browser.process()?.stderr
+  stderrEvidence=browserStderrEvidence(!!ownedBrowserStderr)
+  ownedBrowserStderr?.on('data',captureBrowserStderr)
+  ownedBrowserStderr?.on('error',captureBrowserStderrError)
   if(process.env.EXPECTED_BROWSER_VERSION)expect((await browser.version()).endsWith(process.env.EXPECTED_BROWSER_VERSION)).toBe(true)
   page=await browser.newPage()
   const browserSession=await browser.target().createCDPSession()
@@ -119,11 +129,20 @@ beforeAll(async()=>{
   initialScripts=[...scripts].sort()
 })
 afterAll(async()=>{
-  const browserVersion=await browser?.version(),socketSnapshot=JSON.parse(JSON.stringify(socketEvidence))
+  let browserVersion: string | null = null
+  try { browserVersion=await browser?.version()??null } catch { /* Preserve evidence even if the owned browser exited. */ }
+  const socketSnapshot=JSON.parse(JSON.stringify(socketEvidence))
   const errorSnapshot=[...errors],outboundSnapshot=[...outbound],violationSnapshot=[...violations],loadedScriptNames=[...scripts].sort()
   await Promise.all(pendingProcessEvidence)
   const browserProcessDiagnostics=processEvidence?.report()??{status:'UNAVAILABLE'}
-  await browser?.close()
+  const browserStderrDiagnostics=stderrEvidence.report()
+  const child=browser?.process()
+  const ownedBrowserState=child ? {status:child.exitCode===null&&child.signalCode===null?'RUNNING':'EXITED',
+    exitCode:child.exitCode,signal:child.signalCode===null?null:['SIGKILL','SIGTERM','SIGABRT','SIGSEGV'].includes(child.signalCode)?child.signalCode:'OTHER'} : {status:'UNAVAILABLE'}
+  let browserCloseStatus: 'COMPLETE' | 'UNAVAILABLE' | 'FAILED' = 'UNAVAILABLE'
+  try { await browser?.close();browserCloseStatus=browser?'COMPLETE':'UNAVAILABLE' }
+  catch { browserCloseStatus='FAILED' }
+  finally { ownedBrowserStderr?.off('data',captureBrowserStderr);ownedBrowserStderr?.off('error',captureBrowserStderrError) }
   let transportEvidence:ReturnType<typeof summarizeNetLog>|{status:'UNAVAILABLE'}={status:'UNAVAILABLE'}
   const nativeDiagnostics:Record<string,unknown>={}
   try{
@@ -140,10 +159,11 @@ afterAll(async()=>{
   }
   const report={mode:'isolated read-only production bundle',network:'devnet',sourceCommit:execFileSync('git',['rev-parse','HEAD']).toString().trim(),
     sourceTree:execFileSync('git',['rev-parse','HEAD^{tree}']).toString().trim(),lockfileHash:sha(fs.readFileSync('package-lock.json')),
-    sourceDirty:execFileSync('git',['status','--porcelain']).toString().trim().length>0,browserVersion,browserRevision,browserProcessDiagnostics,errors:errorSnapshot,outbound:outboundSnapshot,violations:violationSnapshot,
+    sourceDirty:execFileSync('git',['status','--porcelain']).toString().trim().length>0,browserVersion,browserRevision,browserProcessDiagnostics,browserStderrDiagnostics,ownedBrowserState,browserCloseStatus,errors:errorSnapshot,outbound:outboundSnapshot,violations:violationSnapshot,
     initialScripts:initialScripts.map((name)=>{const bytes=fs.readFileSync(path.join(outDir,name));return {name,bytes:bytes.length,gzipBytes:gzipSync(bytes).length,sha256:sha(bytes)}}),loadedScriptNames,noticeEvidence,socketEvidence:socketSnapshot,transportEvidence,nativeDiagnostics}
   fs.mkdirSync('.browser-results',{recursive:true});fs.writeFileSync('.browser-results/built-report.json',JSON.stringify(report,null,2)+'\n')
   await new Promise<void>((resolve)=>server?.httpServer.close(()=>resolve())??resolve())
+  expect(browserCloseStatus).not.toBe('FAILED')
   expect(transportEvidence.status).toBe('COMPLETE')
   if('connections' in transportEvidence)expect(transportEvidence.connections.length).toBeGreaterThan(0)
 })

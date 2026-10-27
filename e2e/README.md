@@ -99,6 +99,18 @@ signature while the browser remains usable, even with NetLog enabled; a missing
 NetLog connection graph therefore remains incomplete evidence. A matching
 injected signature alone does not establish the cause of a historical failure.
 
+A failed target run on the tested merge `b8af7c02` observed a replaced network
+service after successful five-node readiness; the browser's empty WebSocket
+error still fails the suite. The reason for that replacement remains unknown.
+The report now passively inspects at most 64 KiB of the owned browser's stderr
+after launch and before teardown. It retains only a fixed count of the pinned
+Chromium [network-service recreation message](https://github.com/chromium/chromium/blob/3ff7ac5a9224be9156d7f8703a06e22890aafd34/content/browser/network_service_instance_impl.cc#L652),
+byte/truncation facts and the owned main browser's exit state. Raw lines,
+identifiers and paths are never included. Missing or incomplete capture stays
+explicit; a zero counter does not prove the service never exited. The message
+itself does not distinguish a crash from termination or establish its cause.
+Reporting snapshots precede the fixture's intentional browser shutdown.
+
 A known pre-publication validation rejection archives the matching signed fixture
 under `e2e/.state/rejected/` and releases its pending slot. The startup cache error
 must name that block's exact acknowledged momentum. Network/timeouts, malformed
