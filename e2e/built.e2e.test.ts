@@ -10,8 +10,10 @@ import { build, preview, type PreviewServer } from 'vite'
 import puppeteer, { type Browser, type Page } from 'puppeteer-core'
 import { assertLab } from './lib/lab.ts'
 import { socketFailureClass } from './lib/socket-evidence.ts'
+import { summarizeNetLog, summarizeNativeLog } from './lib/transport-diagnostics.ts'
 
 const outDir='e2e/.state/browser-build', origin='http://127.0.0.1:5195'
+const netLogFile='e2e/.state/compiled-netlog.private.json'
 let server: PreviewServer, browser: Browser, page: Page
 const errors:string[]=[], outbound:string[]=[], scripts=new Set<string>(), violations:string[]=[]
 let initialScripts:string[]=[]
@@ -30,7 +32,7 @@ beforeAll(async()=>{
   try { await build({envDir:false,logLevel:'error',mode:'production',build:{outDir,emptyOutDir:true}}) }
   finally { if(previousNodeEnv===undefined)delete process.env.NODE_ENV;else process.env.NODE_ENV=previousNodeEnv }
   server=await preview({envDir:false,logLevel:'error',build:{outDir},preview:{host:'127.0.0.1',port:5195,strictPort:true}})
-  browser=await puppeteer.launch({executablePath:process.env.CHROME_PATH,headless:true})
+  browser=await puppeteer.launch({executablePath:process.env.CHROME_PATH,headless:true,args:['--log-net-log='+path.resolve(netLogFile)]})
   if(process.env.EXPECTED_BROWSER_VERSION)expect((await browser.version()).endsWith(process.env.EXPECTED_BROWSER_VERSION)).toBe(true)
   page=await browser.newPage()
   page.on('pageerror',(error)=>errors.push(String(error)))
@@ -92,12 +94,31 @@ beforeAll(async()=>{
   initialScripts=[...scripts].sort()
 })
 afterAll(async()=>{
+  const browserVersion=await browser?.version(),socketSnapshot=JSON.parse(JSON.stringify(socketEvidence))
+  const errorSnapshot=[...errors],outboundSnapshot=[...outbound],violationSnapshot=[...violations],loadedScriptNames=[...scripts].sort()
+  await browser?.close()
+  let transportEvidence:ReturnType<typeof summarizeNetLog>|{status:'UNAVAILABLE'}={status:'UNAVAILABLE'}
+  const nativeDiagnostics:Record<string,unknown>={}
+  try{
+    if(fs.statSync(netLogFile).size>8*1024*1024)throw new Error('NetLog byte bound exceeded')
+    transportEvidence=summarizeNetLog(JSON.parse(fs.readFileSync(netLogFile,'utf8')))
+  }catch{/* Missing/incomplete evidence fails the hook after the report is saved. */}
+  for(const role of ['rpc','pillar','pillar2','pillar3','observer']){
+    const file=`e2e/lab/.build/native/${role}.log`
+    if(!fs.existsSync(file))continue
+    const info=fs.lstatSync(file);if(!info.isFile()||info.isSymbolicLink())continue
+    const bytes=Math.min(info.size,256*1024),buffer=Buffer.alloc(bytes),fd=fs.openSync(file,'r')
+    try{fs.readSync(fd,buffer,0,bytes,info.size-bytes)}finally{fs.closeSync(fd)}
+    nativeDiagnostics[role]={complete:info.size===bytes,bytesRead:bytes,...summarizeNativeLog(buffer.toString())}
+  }
   const report={mode:'isolated read-only production bundle',network:'devnet',sourceCommit:execFileSync('git',['rev-parse','HEAD']).toString().trim(),
     sourceTree:execFileSync('git',['rev-parse','HEAD^{tree}']).toString().trim(),lockfileHash:sha(fs.readFileSync('package-lock.json')),
-    sourceDirty:execFileSync('git',['status','--porcelain']).toString().trim().length>0,browserVersion:await browser?.version(),errors,outbound,violations,
-    initialScripts:initialScripts.map((name)=>{const bytes=fs.readFileSync(path.join(outDir,name));return {name,bytes:bytes.length,gzipBytes:gzipSync(bytes).length,sha256:sha(bytes)}}),loadedScriptNames:[...scripts].sort(),noticeEvidence,socketEvidence}
+    sourceDirty:execFileSync('git',['status','--porcelain']).toString().trim().length>0,browserVersion,errors:errorSnapshot,outbound:outboundSnapshot,violations:violationSnapshot,
+    initialScripts:initialScripts.map((name)=>{const bytes=fs.readFileSync(path.join(outDir,name));return {name,bytes:bytes.length,gzipBytes:gzipSync(bytes).length,sha256:sha(bytes)}}),loadedScriptNames,noticeEvidence,socketEvidence:socketSnapshot,transportEvidence,nativeDiagnostics}
   fs.mkdirSync('.browser-results',{recursive:true});fs.writeFileSync('.browser-results/built-report.json',JSON.stringify(report,null,2)+'\n')
-  await browser?.close();await new Promise<void>((resolve)=>server?.httpServer.close(()=>resolve())??resolve())
+  await new Promise<void>((resolve)=>server?.httpServer.close(()=>resolve())??resolve())
+  expect(transportEvidence.status).toBe('COMPLETE')
+  if('connections' in transportEvidence)expect(transportEvidence.connections.length).toBeGreaterThan(0)
 })
 
 it('loads compiled routes under the declared CSP without development stores or an external request',async()=>{
@@ -136,4 +157,14 @@ it('keeps compiled views within a mobile viewport with disconnected wallets',asy
     expect(await page.evaluate(()=>document.documentElement.scrollWidth-innerWidth)).toBe(0)
   }
   expect(errors).toEqual([]);expect(outbound).toEqual([]);expect(violations).toEqual([])
+})
+
+it('repeats compiled startup without losing a validated browser transport',async()=>{
+  for(let attempt=0;attempt<4;attempt++){
+    const firstSocket=socketEvidence.length
+    await page.goto(origin+'?qualification-startup='+attempt,{waitUntil:'networkidle0'})
+    await expect.poll(()=>socketEvidence.slice(firstSocket).some((socket)=>socket.allowed&&socket.status===101&&!socket.error&&!socket.closed&&socket.frontier?.chainId===322&&socket.frontier.height>=20),{timeout:60_000}).toBe(true)
+    expect(await page.evaluate(()=>(window as any).__bridge)).toBeUndefined()
+    expect(errors).toEqual([]);expect(outbound).toEqual([]);expect(violations).toEqual([])
+  }
 })
