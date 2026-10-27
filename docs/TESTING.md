@@ -157,6 +157,29 @@ Protocol delay tests disable interval mining and control EVM blocks explicitly; 
 
 The one-key orchestrator does not exercise distributed TSS. Native and Docker evidence are separate; a native pass cannot qualify Docker. Real wallet/platform tests, a full pool-to-LP-to-stake lifecycle, independent review, hosted CI and deployment/operator acceptance remain [external gates](QUALIFICATION.md).
 
+### What runs
+
+`e2e/setup.ts` deploys HyperCore's `bridge.sol` (vendored unchanged in
+`e2e/contracts/`, the contract mainnet runs) and a mintable test token on
+anvil, registers the token and the TSS key, then on Zenon sets the
+orchestrator info, the TSS key, the network and the ZNN pair. Each step is
+skipped when the chain already has it.
+
+`e2e/orchestrator.ts` is a single-key stand-in for the orchestrator network.
+It signs the same messages and makes the same contract calls; only the
+threshold ceremony is missing. Its message code is the code the unit tests
+check against a mainnet signature.
+
+| File | Covers |
+|---|---|
+| `bridge.e2e.test.ts` | Wrap and both EVM redeems, unwrap through a referral with both Zenon redeems, exact balances on both chains, every status the app derives on the way, and the health verdict going stalled and back |
+| `ui.e2e.test.ts` | The page in headless Chrome with a mock Syrius provider and a mock EIP-6963 wallet: connect, terms, wrap, redeem twice from Activity, approve and unwrap, redeem on Zenon, Stats online, no console errors, no overflow |
+| `built.e2e.test.ts` | The devnet production bundle as served: routes, CSP, no external requests, mobile layout, a WebSocket frontier on chain 322, cold starts and a reconnect |
+
+The protocol test builds every block and transaction with the app's own
+functions and reads every state through the app's own client, so a failure
+there is a failure in what the page would do.
+
 ### Swaps on a mainnet fork (`e2e/swap.fork.mjs`)
 
 Swaps cannot run on the lab: the routers quote mainnet. This script drives the
