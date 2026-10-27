@@ -27,7 +27,7 @@
     "@fontsource-variable/space-grotesk": "^5.2.5",
     "@lucide/vue": "1.61.0",
     "@noble/curves": "^1.9.1",
-    "@noble/hashes": "^1.8.0",
+    "@noble/hashes": "^2.4.0",
     "bech32": "^2.0.0",
     "viem": "^2.57.11",
     "vue": "^3.5.44"
