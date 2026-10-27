@@ -4,6 +4,19 @@ const sha=/^[0-9a-f]{40}$/
 const digest=/^[0-9a-f]{64}$/
 const object=v=>v&&typeof v==='object'&&!Array.isArray(v)?v:{}
 const natural=n=>Number.isSafeInteger(n)&&n>=0
+const rolePorts=[['pillar',47100],['pillar2',47101],['pillar3',47102],['observer',47103],['rpc',46997]]
+export function nativeFailureTarget(nodes){
+ if(!Array.isArray(nodes)||nodes.length!==rolePorts.length)return null
+ const records=rolePorts.map(([nodeRole,port])=>{
+  const matches=nodes.filter(n=>object(n).port===port)
+  if(matches.length!==1)return null
+  const n=matches[0]
+  return n.error===null&&n.chainId===322&&natural(n.height)&&n.height>=1?{nodeRole,port,frontierHeight:n.height}:null
+ })
+ if(records.some(n=>n===null))return null
+ // A fixed role order resolves equal minima without trusting a request-supplied target.
+ return records.reduce((lowest,n)=>n.frontierHeight<lowest.frontierHeight?n:lowest)
+}
 const messages=new Map([
   ['looking for common ancestor','ANCESTOR_SEARCH'],['common ancestor','ANCESTOR_FOUND'],
   ['Block synchronisation started','SYNC_STARTED'],['Synchronization completed','SYNC_REPORTED_COMPLETE'],
@@ -57,12 +70,14 @@ export function summarizeGoroutines(text){
   }
   return {status:observed?'CAPTURED':'UNAVAILABLE',observed,groups:[...groups.values()],truncated}
 }
-export async function collectNativeFailureFacts({runtime,build,head,tree,readProfile,readLogs}){
+export async function collectNativeFailureFacts({runtime,build,head,tree,nodeRole='rpc',readProfile,readLogs}){
   const r=object(runtime),b=object(build),d=object(r.diagnostics)
   const mode=d.profileMode??'loopback',profileOwner=mode==='loopback'?d.profileHost==='127.0.0.1'&&d.profilePort===47210:mode==='postmortem'&&d.profileHost===null&&d.profilePort===null
-  if(!sha.test(head??'')||!sha.test(tree??'')||!digest.test(b.key??'')||!digest.test(b.binaryHash??'')||!sha.test(b.sourceCommit??'')||!sha.test(b.sourceTree??'')||r.bridgeSourceCommit!==head||r.bridgeSourceTree!==tree||r.buildKey!==b.key||r.znndHash!==b.binaryHash||r.sourceCommit!==b.sourceCommit||r.sourceTree!==b.sourceTree||!profileOwner||!['error','info'].includes(d.rpcLogLevel))return {status:'OWNER_SCOPE_UNAVAILABLE'}
+  const roles=rolePorts.map(([role])=>role),declared=d.postmortemRoles
+  const nodeOwner=roles.includes(nodeRole)&&(nodeRole==='rpc'||Array.isArray(declared)&&declared.length===5&&new Set(declared).size===5&&roles.every(role=>declared.includes(role)))
+  if(!sha.test(head??'')||!sha.test(tree??'')||!digest.test(b.key??'')||!digest.test(b.binaryHash??'')||!sha.test(b.sourceCommit??'')||!sha.test(b.sourceTree??'')||r.bridgeSourceCommit!==head||r.bridgeSourceTree!==tree||r.buildKey!==b.key||r.znndHash!==b.binaryHash||r.sourceCommit!==b.sourceCommit||r.sourceTree!==b.sourceTree||!profileOwner||!nodeOwner||!['error','info'].includes(d.rpcLogLevel))return {status:'OWNER_SCOPE_UNAVAILABLE'}
   let profile={status:'UNAVAILABLE'},logs={status:'UNAVAILABLE'}
   try{profile=summarizeGoroutines(await readProfile())}catch{/* Unavailable is not evidence of a healthy importer. */}
   try{logs=await readLogs()}catch{/* No raw filesystem or peer error is retained. */}
-  return {status:profile.status==='CAPTURED'?'CAPTURED':'PARTIAL',profileMode:mode,rpcLogLevel:d.rpcLogLevel,coldCase:['error-a','error-b','info'].includes(d.coldCase)?d.coldCase:'manual',profile,logs}
+  return {status:profile.status==='CAPTURED'?'CAPTURED':'PARTIAL',nodeRole,profileMode:mode,captureMode:nodeRole==='rpc'?mode:'postmortem',rpcLogLevel:d.rpcLogLevel,coldCase:['error-a','error-b','info'].includes(d.coldCase)?d.coldCase:'manual',profile,logs}
 }

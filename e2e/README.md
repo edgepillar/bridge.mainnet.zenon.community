@@ -33,18 +33,24 @@ depth and exact five-node convergence requirements are unchanged.
 
 The `error-b` case keeps the original Go startup without a profiling listener.
 Only after an actual readiness refusal and its read-only peer/hash snapshot,
-the source-bound supervisor may signal its exact owned RPC child with SIGQUIT
-for a postmortem. A private per-start challenge, exact source/build identity,
+the source-bound supervisor may signal the exact owned node with the lowest
+valid frontier for a postmortem. A private per-start challenge, exact source/build/node-role identity,
 one-shot request and verified child exit bind the capture. It stops this
 already-failed isolated fixture; the original failure remains fatal. This
 separates startup profiling from the unprofiled failure being investigated.
 The `error-a` and `info` cases retain a loopback-only profiling listener for
-comparison. No case signals a PID supplied by a request.
+comparison on the RPC node. Every case also owns private, one-shot postmortem
+controls for all five fixture nodes. A lagging producer uses its own unprofiled
+postmortem even when the RPC has a loopback profiler. No case signals a PID
+supplied by a request. Equal minimum heights use a fixed producer-first role
+order; incomplete or foreign frontier records do not select a node.
 
 After preserving a native readiness failure, the report compares all five
 hashes at the lowest observed frontier, in addition to height two. It also
-collects a bounded loopback profile or owned-child postmortem from the isolated
-RPC process and fixed log categories. Only public Go function names, wait classes,
+collects a bounded loopback profile or owned-child postmortem from the selected
+isolated node and fixed log categories. The public report identifies the selected
+fixture role, port and observed height. This prevents a healthy RPC profile from
+standing in for a stalled producer. Only public Go function names, wait classes,
 counts and numeric heights leave the parser. Raw profiles/logs, goroutine IDs,
 pointer arguments, peer data and paths are excluded. Missing ownership or
 incomplete diagnostic data stays unavailable. Private control files and raw

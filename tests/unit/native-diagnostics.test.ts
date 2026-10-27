@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { collectNativeFailureFacts, summarizeGoroutines, summarizeSyncLog } from '../../e2e/lab/native-diagnostics.mjs'
+import { collectNativeFailureFacts, nativeFailureTarget, summarizeGoroutines, summarizeSyncLog } from '../../e2e/lab/native-diagnostics.mjs'
 
 const profile=`goroutine 987654321 [semacquire]:
 sync.(*Mutex).Lock(0x123, PRIVATE_ARGUMENT)
@@ -54,4 +54,31 @@ it('supports unprofiled startup only with the exact postmortem owner fields',asy
  let reads=0
  const refused=await collectNativeFailureFacts({...original,runtime:{...runtime,diagnostics:{...runtime.diagnostics,profileHost:'127.0.0.1'}},readProfile:async()=>{reads++;return profile},readLogs:async()=>{reads++;return {}}})
  expect(refused.status).toBe('OWNER_SCOPE_UNAVAILABLE');expect(reads).toBe(0)
+})
+const frontiers=()=>[46997,47100,47101,47102,47103].map(port=>({port,height:41,chainId:322,error:null}))
+it('selects the actual lagging RPC or producer in the preserved failure shapes',()=>{
+ for(const [port,height,nodeRole] of [[46997,5,'rpc'],[47100,2,'pillar'],[47101,3,'pillar2']] as const){
+  const nodes=frontiers();nodes.find(n=>n.port===port)!.height=height
+  expect(nativeFailureTarget(nodes)).toEqual({nodeRole,port,frontierHeight:height})
+ }
+})
+it('refuses malformed, duplicate, missing and foreign frontier ownership before selecting a target',()=>{
+ const original=frontiers()
+ for(const nodes of [null,original.slice(1),[...original.slice(0,4),original[0]],original.map((n,i)=>i===0?{...n,port:6060}:n),original.map((n,i)=>i===0?{...n,chainId:1}:n),original.map((n,i)=>i===0?{...n,height:'3'}:n),original.map((n,i)=>i===0?{...n,error:'READ_UNAVAILABLE'}:n)])expect(nativeFailureTarget(nodes)).toBeNull()
+})
+it('uses a deterministic owned producer when several frontiers share the minimum',()=>{
+ const nodes=frontiers();nodes.find(n=>n.port===46997)!.height=3;nodes.find(n=>n.port===47100)!.height=3
+ expect(nativeFailureTarget(nodes.reverse())).toEqual({nodeRole:'pillar',port:47100,frontierHeight:3})
+})
+it('requires all declared owned node roles before collecting a non-RPC postmortem',async()=>{
+ const original=owner(),roles=['rpc','pillar','pillar2','pillar3','observer'];let reads=0
+ const readProfile=async()=>{reads++;return profile},readLogs=async()=>({})
+ for(const declared of [undefined,['pillar2'],['rpc','pillar','pillar2','pillar3','pillar2']]){
+  const result=await collectNativeFailureFacts({...original,nodeRole:'pillar2',runtime:{...original.runtime,diagnostics:{...original.runtime.diagnostics,postmortemRoles:declared}},readProfile,readLogs})
+  expect(result.status).toBe('OWNER_SCOPE_UNAVAILABLE')
+ }
+ expect(reads).toBe(0)
+ const result=await collectNativeFailureFacts({...original,nodeRole:'pillar2',runtime:{...original.runtime,diagnostics:{...original.runtime.diagnostics,postmortemRoles:roles}},readProfile,readLogs})
+ expect(result).toMatchObject({status:'CAPTURED',nodeRole:'pillar2',profileMode:'loopback',captureMode:'postmortem'});expect(reads).toBe(1)
+ expect(JSON.stringify(result)).not.toMatch(/PRIVATE|0x|987654/)
 })
