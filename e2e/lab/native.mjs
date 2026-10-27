@@ -8,11 +8,15 @@ import { here, digest, verifiedBuild } from './verify-build.mjs'
 const manifest = verifiedBuild('native'), pins = manifest.pins
 const root = path.join(here, '.build/native'), assets = path.join(root, 'assets')
 const anvil = process.env.ANVIL_BIN
+const rpcLogLevel = process.env.LAB_RPC_LOG_LEVEL ?? 'error'
+if (!['error', 'info'].includes(rpcLogLevel)) throw new Error('Unsupported isolated RPC diagnostic log level')
+const coldCase = process.env.LAB_COLD_CASE ?? 'manual'
+if (!['manual', 'error-a', 'error-b', 'info'].includes(coldCase)) throw new Error('Unsupported isolated cold-start case')
 if (!anvil) throw new Error('Set ANVIL_BIN to the pinned Anvil executable')
 const anvilVersion = execFileSync(anvil, ['--version']).toString().trim()
 if (anvilVersion.split('\n')[0] !== `anvil Version: ${pins.anvilVersion}`) throw new Error('Anvil version does not match the lab pin')
 const ports = { pillar: 47010, pillar2: 47012, pillar3: 47013, observer: 47014, rpc: 47011 }
-for (const port of [...Object.values(ports), 46997, 46998, 46545, 47100, 47101, 47102, 47103, 47200, 47201, 47202, 47203]) {
+for (const port of [...Object.values(ports), 46997, 46998, 46545, 47100, 47101, 47102, 47103, 47200, 47201, 47202, 47203, 47210]) {
   await new Promise((resolve, reject) => {
     const server = net.createServer(); server.once('error', reject)
     server.listen(port, '127.0.0.1', () => server.close(resolve))
@@ -50,7 +54,7 @@ for (const [role, port] of Object.entries(ports)) {
     fixture.Path = file; fs.writeFileSync(file, JSON.stringify(fixture))
   }
   const cfg = JSON.parse(fs.readFileSync(configFile))
-  cfg.DataPath = data; cfg.GenesisFile = path.join(assets, 'genesis.json'); cfg.WalletPath = path.join(data, 'wallet'); cfg.LogLevel = 'error'
+  cfg.DataPath = data; cfg.GenesisFile = path.join(assets, 'genesis.json'); cfg.WalletPath = path.join(data, 'wallet'); cfg.LogLevel = role === 'rpc' ? rpcLogLevel : 'error'
   cfg.Net.ListenHost = '127.0.0.1'; cfg.Net.ListenPort = port
   // Use the pinned source's libp2p backend and an explicit five-node capacity.
   // Legacy discovery on one loopback IP can leave a fixture producer isolated.
@@ -64,10 +68,11 @@ for (const [role, port] of Object.entries(ports)) {
   cfg.RPC.HTTPPort = role === 'rpc' ? 46997 : 47100 + index
   cfg.RPC.WSPort = role === 'rpc' ? 46998 : 47200 + index++
   fs.writeFileSync(configFile, JSON.stringify(cfg)); configHashes[role] = digest(fs.readFileSync(configFile))
-  start(path.join(here, '.build/znnd'), ['--data', data, '--config', configFile], `${role}.log`, { ZNN_DEVNET_BRIDGE: '1', ZNN_BRIDGE_ADMIN: 'z1qq6eg8n43g032hanpsfp02qcdmv7zfj3y2lt5d', GOMAXPROCS: '2', GOMEMLIMIT: '256MiB' })
+  const diagnostics = role === 'rpc' ? ['--pprof', '--pprof.addr', '127.0.0.1', '--pprof.port', '47210'] : []
+  start(path.join(here, '.build/znnd'), [...diagnostics, '--data', data, '--config', configFile], `${role}.log`, { ZNN_DEVNET_BRIDGE: '1', ZNN_BRIDGE_ADMIN: 'z1qq6eg8n43g032hanpsfp02qcdmv7zfj3y2lt5d', GOMAXPROCS: '2', GOMEMLIMIT: '256MiB' })
 }
 start(anvil, ['--host', '127.0.0.1', '--port', '46545', '--chain-id', String(pins.chainIds.evm), '--block-time', '1', '--silent'], 'anvil.log')
-fs.writeFileSync(path.join(root, 'run-manifest.json'), JSON.stringify({ sourceCommit: manifest.sourceCommit, sourceTree: manifest.sourceTree, buildKey: manifest.key, znndHash: manifest.binaryHash, anvilHash: digest(fs.readFileSync(anvil)), anvilVersion, genesisHash: digest(fs.readFileSync(path.join(assets, 'genesis.json'))), configHashes, startedAt: new Date().toISOString(), chainIds: pins.chainIds }, null, 2))
+fs.writeFileSync(path.join(root, 'run-manifest.json'), JSON.stringify({ sourceCommit: manifest.sourceCommit, sourceTree: manifest.sourceTree, bridgeSourceCommit: execFileSync('git', ['rev-parse', 'HEAD']).toString().trim(), bridgeSourceTree: execFileSync('git', ['rev-parse', 'HEAD^{tree}']).toString().trim(), buildKey: manifest.key, znndHash: manifest.binaryHash, anvilHash: digest(fs.readFileSync(anvil)), anvilVersion, genesisHash: digest(fs.readFileSync(path.join(assets, 'genesis.json'))), configHashes, startedAt: new Date().toISOString(), chainIds: pins.chainIds, diagnostics: { profileHost: '127.0.0.1', profilePort: 47210, rpcLogLevel, coldCase } }, null, 2))
 console.log('Pinned native bridge lab started on loopback; verify chain readiness before fixture writes.')
 await Promise.all(children.map((child) => new Promise((resolve) => child.once('exit', resolve))))
 process.exitCode = failed ? 1 : 0

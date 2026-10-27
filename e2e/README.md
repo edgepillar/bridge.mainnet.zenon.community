@@ -24,6 +24,22 @@ Readiness must succeed before the tests. It checks production and agreement acro
 On a convergence timeout, the failure report additionally records bounded
 read-only peer counts, numeric sync state/heights and each node's height-two
 momentum hash. Missing or malformed diagnostic data remains unavailable.
+
+Native qualification runs three independent fresh cold-start cases: two with
+the original error-only RPC logging and one with RPC info logging. Each case
+has its own runner, chain and artifact; every failure stays failed. There is no
+warm restart or successful-case substitution. The 600-second, minimum-height,
+depth and exact five-node convergence requirements are unchanged.
+
+After preserving a native readiness failure, the report compares all five
+hashes at the lowest observed frontier, in addition to height two. It also
+collects a bounded loopback-only profile from the source-bound isolated RPC
+process and fixed log categories. Only public Go function names, wait classes,
+counts and numeric heights leave the parser. Raw profiles/logs, goroutine IDs,
+pointer arguments, peer data and paths are excluded. Missing ownership or
+incomplete diagnostic data stays unavailable. Successful readiness performs
+no profile or diagnostic-log reads. These diagnostics do not fix or establish
+the historical sync-lag cause by themselves.
 Peer identities, addresses, names and raw RPC errors are excluded. These
 failure-only reads do not extend the qualification window, restart nodes or
 permit fixture writes.
