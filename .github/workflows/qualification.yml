@@ -119,6 +119,7 @@ jobs:
           touch .lab-tools/docker-launch-owned
           npm run lab:up
           npm run test:e2e
+          BROWSER_PROBE_MODE=docker node --experimental-strip-types e2e/browser-transport-probe.mjs
       - name: Stop this job's Docker lab
         if: always()
         run: |
@@ -131,6 +132,7 @@ jobs:
           name: docker-qualification-evidence
           path: |
             .browser-results/built-report.json
+            .browser-results/lab-transport-probe-report.json
             e2e/lab/.build/manifest.json
             e2e/lab/.build/docker/run-manifest.json
             e2e/lab/.build/docker/readiness-report.json
@@ -204,6 +206,7 @@ jobs:
           node e2e/lab/frontier.mjs 60 --wait 120 --native
           npm run test:browser
           npm run test:e2e
+          BROWSER_PROBE_MODE=native node --experimental-strip-types e2e/browser-transport-probe.mjs
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -211,6 +214,7 @@ jobs:
           path: |
             .browser-results/report.json
             .browser-results/built-report.json
+            .browser-results/lab-transport-probe-report.json
             .browser-results/*.png
             e2e/lab/.build/manifest.json
             e2e/lab/.build/downloader-control-report.json

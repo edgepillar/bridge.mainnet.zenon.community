@@ -208,3 +208,12 @@ This bounded experiment investigates the preserved natural network-service
 replacement. A passing probe or injected calibration does not establish its cause
 or dispose of historical failures. The browser pin, fatal transport assertions,
 sandbox and five-node readiness requirements are unchanged.
+
+Each native/Docker job also runs 12 fresh browsers before its owned lab stops.
+These use the actual qualified Go RPC codec: one validated chain-322 frontier
+response releases twelve concurrent `ledger.getMomentumsByPage(0, 30)` reads.
+This reproduces the application's staged startup pattern instead of substituting
+a Node WebSocket writer. Source/build/runtime identities must match the current
+lab manifests. Only bounded ledger reads are sent; no wallet, subscription,
+signature, transfer or chain write is involved. The separate sanitized report
+does not establish an unobserved historical cause or production acceptance.
