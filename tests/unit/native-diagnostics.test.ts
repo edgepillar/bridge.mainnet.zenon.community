@@ -41,12 +41,12 @@ it('keeps the two real sync-worker joins distinct without publishing source path
 })
 it('requires the exact built downloader file hash before inferring a source wait site',async()=>{
  const original=owner(),commit='616f0a61ebc8562846965822f94976e531e0937c'
- const stack='goroutine 987654321 [select]:\ngithub.com/zenon-network/go-zenon/protocol/downloader.(*Downloader).fetchHashes(PRIVATE_ARGUMENT)\n\t/PRIVATE_SOURCE/protocol/downloader/downloader.go:548 +0x123\n\n'
- for(const fileHash of [undefined,'7'.repeat(64),'2f5b1adf15958ba170d288831225b9a4156d57c9348676b321fbb755f2aaaa68']){
+ for(const fileHash of [undefined,'7'.repeat(64),'2f5b1adf15958ba170d288831225b9a4156d57c9348676b321fbb755f2aaaa68','1a4ab891c4ced859adc249853f48f893a63ddfd90f886d2b6a6306c649e8d8b8']){
+  const stack=`goroutine 987654321 [select]:\ngithub.com/zenon-network/go-zenon/protocol/downloader.(*Downloader).fetchHashes(PRIVATE_ARGUMENT)\n\t/PRIVATE_SOURCE/protocol/downloader/downloader.go:${fileHash?.startsWith('1a4a')?550:548} +0x123\n\n`
   const build={...original.build,sourceCommit:commit,downloaderSourceHash:fileHash}
   const runtime={...original.runtime,sourceCommit:commit}
   const result=await collectNativeFailureFacts({...original,build,runtime,readProfile:async()=>stack,readLogs:async()=>({})})
-  expect(result.profile.groups[0].waitSite).toBe(fileHash?.startsWith('2f5b')?'HASH_COMPLETION_HANDOFF':undefined)
+  expect(result.profile.groups[0].waitSite).toBe(fileHash?.startsWith('2f5b')||fileHash?.startsWith('1a4a')?'HASH_COMPLETION_HANDOFF':undefined)
   expect(JSON.stringify(result)).not.toMatch(/PRIVATE|987654|0x123|downloader\.go/)
  }
 })

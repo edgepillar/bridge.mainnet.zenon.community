@@ -1,0 +1,1 @@
+export function summarizeGoTest(output:Buffer):{passed:number;failed:number;skipped:number;uniqueTests:number;regressionPassed:number;regressionFailed:number;packageResult:string|null;expectedStall:boolean;expectedWaitGraph:boolean}

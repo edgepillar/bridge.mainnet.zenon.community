@@ -132,3 +132,45 @@ original hash. There is no automatic resend, replacement signature or cleanup of
 old lab state.
 
 The genesis generator backs every declared QSR fusion while preserving total supply; index 1 has 10,000 ZNN and 70,000 spendable QSR plus its fused QSR. Setup deploys/configures the lab bridge/token, and the suites exercise wrap, delayed two-step EVM redemption, unwrap/referral, Zenon redemption and UI behavior. See [qualification boundaries](../docs/QUALIFICATION.md) and [release gates](../docs/DEPLOY.md).
+
+## Downloader phase isolation
+
+A failed synchronization could leave an EOF flag in the downloader's shared
+`processCh`. The next block-fetch worker could consume that old flag before new
+hashes arrived and exit successfully. The new hash worker then queued two hashes
+and blocked sending its EOF to a full channel with no block worker left. The
+outer sync joined the blocked worker indefinitely. This is independent of a
+particular height: the actual package regression freezes at height 5, while a
+natural Linux CI producer froze at height 2.
+
+The pinned package passed its nine existing tests. A control using two complete
+actual synchronizations, the real queue/peer/delivery functions and descending
+protocol hash replies reproduced height 5, two pending hashes and active sync.
+It did not seed `processCh` directly. Resetting that channel for each new sync
+made all ten package tests and ten repeated controlled interleavings pass. The
+[natural failure on the unpatched source](https://github.com/edgepillar/bridge.mainnet.zenon.community/actions/runs/40545587535/attempts/1)
+independently captured `HASH_COMPLETION_HANDOFF` and
+`SYNC_JOIN_AFTER_FIRST_SUCCESS`, with no block-fetch worker. Its exact Go source
+and downloader-file hash matched the control. The older RPC-5 run lacks this
+stack evidence; no exact retrospective attribution is claimed for that run.
+
+Both native and Docker lab builds now apply only this two-line synchronization
+patch to the exported Go source. `downloader-phase-reset.mjs` refuses any source
+or result whose SHA-256 differs from the qualified preimage/result. The Go base
+commit/tree remain pinned and its checkout is never edited. Build manifests
+record the original/patched identities, actual downloader hash and all overlay
+hashes. The runtime is therefore explicitly a patched lab build. Consensus rules,
+genesis, peer requirements and convergence/timeout assertions are unchanged.
+This does not install a fix on an operating bridge or accept a production node
+upgrade; those remain operator/owner decisions.
+
+The native `error-b` CI job also qualifies the package control before starting
+its fresh chains. It exports the exact unmodified Git archive, passes the nine
+baseline tests, requires the original height-5 regression to fail, then applies
+the exact patch and requires ten package tests plus ten repeated controls to
+pass with zero skips. Go stays offline using the module cache already populated
+by the pinned native build. Only fixed outcomes, counters, source/runtime pins
+and stream SHA-256/byte/completeness facts enter `downloader-control-report.json`.
+Raw command output and stack data stay outside uploaded artifacts. A failure
+remains fatal. Current-source Linux/native/Docker evidence is required separately
+from the completed Darwin package control and any earlier successful cold case.

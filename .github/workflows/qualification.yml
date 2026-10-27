@@ -154,6 +154,9 @@ jobs:
           sudo install -m 0644 .lab-tools/browser.apparmor /etc/apparmor.d/bridge-qualification-browser
           sudo apparmor_parser --replace /etc/apparmor.d/bridge-qualification-browser
       - run: npm run lab:build:native
+      - name: Reproduce and qualify downloader phase isolation
+        if: matrix.sync_case == 'error-b'
+        run: node e2e/lab/downloader-phase-control.mjs
       - name: Qualify components and both isolated chains
         run: |
           node e2e/lab/native.mjs > .lab-tools/native.log 2>&1 &
@@ -171,6 +174,7 @@ jobs:
             .browser-results/built-report.json
             .browser-results/*.png
             e2e/lab/.build/manifest.json
+            e2e/lab/.build/downloader-control-report.json
             e2e/lab/.build/native/run-manifest.json
             e2e/lab/.build/native/readiness-report.json
             e2e/.cache/compile-manifest.json

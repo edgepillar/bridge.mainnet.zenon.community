@@ -1,5 +1,6 @@
 // Fixed-schema facts only. Raw logs and profiles can contain peer data, paths
 // and pointer arguments and must never enter qualification artifacts.
+import { downloaderPhaseReset } from './downloader-phase-reset.mjs'
 const sha=/^[0-9a-f]{40}$/
 const digest=/^[0-9a-f]{64}$/
 const object=v=>v&&typeof v==='object'&&!Array.isArray(v)?v:{}
@@ -51,7 +52,7 @@ export function summarizeSyncLog(text){
   }
   return {counts,events,truncated}
 }
-export function summarizeGoroutines(text,sourceCommit=null){
+export function summarizeGoroutines(text,sourceCommit=null,downloaderHash=downloaderPhaseReset.originalSha256){
   if(Buffer.byteLength(text)>2*1024*1024)throw new Error('Native profile bound exceeded')
   const groups=new Map();let observed=0,truncated=false
   for(const block of text.split(/\n\n/)){
@@ -66,9 +67,9 @@ export function summarizeGoroutines(text,sourceCommit=null){
         if(frames.length<24)frames.push(frame);else truncated=true
         // Only this exact source has the reviewed line-to-branch mapping.
         // Paths and offsets remain private; publish a fixed semantic category.
-        if(sourceCommit==='616f0a61ebc8562846965822f94976e531e0937c'){
+        if(sourceCommit===downloaderPhaseReset.sourceCommit&&[downloaderPhaseReset.originalSha256,downloaderPhaseReset.patchedSha256].includes(downloaderHash)){
           const location=lines[index+1]?.match(/^\s+[^\r\n]*\/protocol\/downloader\/downloader\.go:(\d+)(?:\s|$)/)
-          const sourceLine=location?Number(location[1]):null
+          const sourceLine=location?Number(location[1])-(downloaderHash===downloaderPhaseReset.patchedSha256?2:0):null
           if(frame==='github.com/zenon-network/go-zenon/protocol/downloader.(*Downloader).fetchHashes'){
             if(sourceLine===548)waitSite='HASH_COMPLETION_HANDOFF'
             else if(sourceLine===532)waitSite='HASH_REPLY_OR_TIMEOUT'
@@ -92,8 +93,8 @@ export async function collectNativeFailureFacts({runtime,build,head,tree,nodeRol
   const nodeOwner=roles.includes(nodeRole)&&(nodeRole==='rpc'||Array.isArray(declared)&&declared.length===5&&new Set(declared).size===5&&roles.every(role=>declared.includes(role)))
   if(!sha.test(head??'')||!sha.test(tree??'')||!digest.test(b.key??'')||!digest.test(b.binaryHash??'')||!sha.test(b.sourceCommit??'')||!sha.test(b.sourceTree??'')||r.bridgeSourceCommit!==head||r.bridgeSourceTree!==tree||r.buildKey!==b.key||r.znndHash!==b.binaryHash||r.sourceCommit!==b.sourceCommit||r.sourceTree!==b.sourceTree||!profileOwner||!nodeOwner||!['error','info'].includes(d.rpcLogLevel))return {status:'OWNER_SCOPE_UNAVAILABLE'}
   let profile={status:'UNAVAILABLE'},logs={status:'UNAVAILABLE'}
-  const mappedSource=b.downloaderSourceHash==='2f5b1adf15958ba170d288831225b9a4156d57c9348676b321fbb755f2aaaa68'?b.sourceCommit:null
-  try{profile=summarizeGoroutines(await readProfile(),mappedSource)}catch{/* Unavailable is not evidence of a healthy importer. */}
+  const mappedSource=[downloaderPhaseReset.originalSha256,downloaderPhaseReset.patchedSha256].includes(b.downloaderSourceHash)?b.sourceCommit:null
+  try{profile=summarizeGoroutines(await readProfile(),mappedSource,b.downloaderSourceHash??null)}catch{/* Unavailable is not evidence of a healthy importer. */}
   try{logs=await readLogs()}catch{/* No raw filesystem or peer error is retained. */}
   return {status:profile.status==='CAPTURED'?'CAPTURED':'PARTIAL',nodeRole,profileMode:mode,captureMode:nodeRole==='rpc'?mode:'postmortem',rpcLogLevel:d.rpcLogLevel,coldCase:['error-a','error-b','info'].includes(d.coldCase)?d.coldCase:'manual',profile,logs}
 }

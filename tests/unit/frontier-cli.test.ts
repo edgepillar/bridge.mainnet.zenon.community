@@ -9,7 +9,7 @@ const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true }) })
 function diagnostic(scenario: string, mode?: string) {
   const root = fs.mkdtempSync(path.join(tmpdir(), 'bridge-frontier-cli-')); roots.push(root)
-  for (const name of ['frontier.mjs', 'readiness.mjs', 'native-diagnostics.mjs']) fs.copyFileSync(fileURLToPath(new URL('../../e2e/lab/' + name, import.meta.url)), path.join(root, name))
+  for (const name of ['frontier.mjs', 'readiness.mjs', 'native-diagnostics.mjs', 'downloader-phase-reset.mjs']) fs.copyFileSync(fileURLToPath(new URL('../../e2e/lab/' + name, import.meta.url)), path.join(root, name))
   if(scenario==='producer-profile'){
     const identity=JSON.parse(spawnSync('git',['log','-1','--format={"head":"%H","tree":"%T"}'],{encoding:'utf8'}).stdout)
     const build={key:'3'.repeat(64),binaryHash:'4'.repeat(64),sourceCommit:'5'.repeat(40),sourceTree:'6'.repeat(40)}
