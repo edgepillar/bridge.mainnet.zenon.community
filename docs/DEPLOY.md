@@ -45,6 +45,25 @@ These gates have distinct scopes. Frontend review and fixture qualification can 
 
 The plasma proxy gate is conditional. An administrator must record whether the accepted deployment uses direct browser-public-token mode, proxy mode or the service's form, and qualify that selected scope. Restoring configuration support does not inspect a deployed token or establish service authorization. No proxy deployment is required when proxy mode is not selected. Source defaults do not establish deployed repository-variable or secret values.
 
+## Plasma bot
+
+When a Zenon recipient has no plasma, the Bridge view offers to get some from
+zenonhub's plasma bot:
+
+```
+POST https://zenonhub.io/api/utilities/plasma-bot/fuse
+Authorization: Bearer <token with the plasma-bot ability>
+{"address": "z1…"}
+```
+
+The endpoint allows any origin. A proxy that keeps the token off the page can
+be a Cloudflare Worker of twenty lines: accept `{address}`, check it is a z1
+address, forward with the token. Point `VITE_PLASMA_BOT_URL` at it and build
+with no token.
+
+The original default node, `wss://syrius-mainnet.zenon.community`, answers 404
+since 2026 and is not in `VITE_ZNN_NODE`'s default list.
+
 ## What is not deployed
 
 No server, no analytics, no remote scripts. Everything the page needs is in
