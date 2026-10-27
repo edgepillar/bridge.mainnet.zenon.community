@@ -3,7 +3,7 @@
 import {spawn} from 'node:child_process'
 import path from 'node:path'
 
-const roles=['OWNED_BROWSER','OWNED_NETWORK_SERVICE','OTHER_PROCESS','KERNEL_CONTEXT','UNRESOLVED']
+const roles=['OWNED_BROWSER','OWNED_BROWSER_DESCENDANT','OWNED_NETWORK_SERVICE','OTHER_PROCESS','KERNEL_CONTEXT','UNRESOLVED']
 const signals=['SIGINT','SIGILL','SIGTRAP','SIGABRT','SIGBUS','SIGKILL','SIGSEGV','SIGTERM','SIGSYS','OTHER']
 export function sanitizeSignalReport(value:unknown){
  const r=value as Record<string,any>|null
@@ -17,6 +17,14 @@ export function sanitizeSignalReport(value:unknown){
  return {status:r.status,scope:r.scope,events,truncated:r.truncated,parseErrors:r.parseErrors,rawTracePublished:false,injectedSignals:0,targetOwnershipVerified:r.targetOwnershipVerified===true,observedInitialThreads:Number.isSafeInteger(r.observedInitialThreads)?r.observedInitialThreads:null,kernelBufferLosses:Number.isSafeInteger(r.kernelBufferLosses)?r.kernelBufferLosses:null,stopReason:r.stopReason,maximumWindowSeconds:15}
 }
 
+export function completedSignalReport(value:unknown,actualExit:number|null,signal:string|null){
+ let report:Record<string,unknown>
+ try{report=sanitizeSignalReport(value)}catch{report={status:'UNAVAILABLE',reason:'OWNED_SIGNAL_OBSERVATION_REFUSED',rawTracePublished:false}}
+ const helperProcess={state:actualExit===null&&signal===null?'UNKNOWN':'EXITED',actualExit,signal:signal===null?null:['SIGKILL','SIGTERM','SIGABRT','SIGSEGV'].includes(signal)?signal:'OTHER'}
+ if(actualExit!==0||signal!==null)report.status='UNAVAILABLE'
+ return {...report,helperProcess}
+}
+
 export async function browserSignalEvidence(browser:number|undefined,query:()=>Promise<unknown>){
  let value:Record<string,unknown>={status:'UNAVAILABLE',reason:'NOT_ENABLED',rawTracePublished:false}
  if(process.env.BROWSER_SIGNAL_TRACE!=='1')return {report:()=>value,stop:async()=>{}}
@@ -27,7 +35,7 @@ export async function browserSignalEvidence(browser:number|undefined,query:()=>P
  const child=spawn('sudo',['-n','python3',path.resolve('e2e/lib/browser-signal-watch.py'),'--watch',String(browser),String(targets[0].id)],{stdio:['pipe','pipe','pipe']})
  let pending='',bytes=0,closed=false,ready=false,stopping=false,resolveReady:()=>void=()=>{},resolveClose:()=>void=()=>{}
  const readyPromise=new Promise<void>(resolve=>{resolveReady=resolve}),closePromise=new Promise<void>(resolve=>{resolveClose=resolve})
- const refused=()=>{value={status:'UNAVAILABLE',reason:'OWNED_SIGNAL_OBSERVATION_REFUSED',rawTracePublished:false}}
+ const refused=()=>{const prior=value.helperProcess;value={status:'UNAVAILABLE',reason:'OWNED_SIGNAL_OBSERVATION_REFUSED',rawTracePublished:false,...(prior?{helperProcess:prior}:{})}}
  child.stdout.on('data',(chunk:Buffer)=>{
   bytes+=chunk.length
   if(bytes>32768){refused();return}
@@ -46,12 +54,12 @@ export async function browserSignalEvidence(browser:number|undefined,query:()=>P
  child.stdin.on('error',()=>{if(!closed)refused()})
  child.stdout.on('error',refused)
  child.on('error',()=>{refused();resolveReady()})
- child.on('close',()=>{closed=true;resolveReady();resolveClose()})
+ child.on('close',(code,signal)=>{value=completedSignalReport(value,code,signal);closed=true;resolveReady();resolveClose()})
  let timer:ReturnType<typeof setTimeout>|undefined
  try{await Promise.race([readyPromise,new Promise<void>(resolve=>{timer=setTimeout(resolve,2500)})])}finally{clearTimeout(timer)}
  if(!ready)refused()
  return {
-  report:()=>value,
+  report:()=>({...value,helperOutputComplete:closed&&bytes<=32768&&pending===''}),
   async stop(){
    if(!closed&&!stopping){stopping=true;child.stdin.write('STOP\n',()=>{});child.stdin.end()}
    let deadline:ReturnType<typeof setTimeout>|undefined

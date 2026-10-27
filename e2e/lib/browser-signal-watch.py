@@ -50,7 +50,7 @@ def descendant(pid, parent):
     return False
 
 
-def classify_line(line, targets, browser, target, lookup=proc):
+def classify_line(line, targets, browser, target, lookup=proc, is_child=descendant):
     # The event-specific pid is the recipient, common_pid in the prefix is the
     # generating thread. Never return either identifier or the comm field.
     match = re.fullmatch(r'\s*.+-(\d+)\s+\[\d+\].*?\s\d+\.\d+: signal_generate: sig=(\d+) errno=(-?\d+) code=(-?\d+) comm=.{1,64} pid=(\d+) grp=(\d+) res=(\d+)\s*', line)
@@ -66,6 +66,8 @@ def classify_line(line, targets, browser, target, lookup=proc):
         try:
             group = lookup(sender)[0]
             role = 'OWNED_BROWSER' if group == browser else 'OWNED_NETWORK_SERVICE' if group == target else 'OTHER_PROCESS'
+            if role == 'OTHER_PROCESS' and is_child(group, browser):
+                role = 'OWNED_BROWSER_DESCENDANT'
         except (OSError, ValueError, KeyError, IndexError):
             pass
     return {'signal': SIGNALS.get(sig, 'OTHER'), 'senderRole': role,

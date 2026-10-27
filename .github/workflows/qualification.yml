@@ -218,6 +218,9 @@ jobs:
           npm run test:browser
           npm run test:e2e
           BROWSER_PROBE_MODE=native node --experimental-strip-types e2e/browser-transport-probe.mjs
+          if test "$LAB_COLD_CASE" = info; then
+            BROWSER_PROBE_MODE=native BROWSER_PROBE_CLIENT=compiled node --experimental-strip-types e2e/browser-transport-probe.mjs
+          fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -226,6 +229,7 @@ jobs:
             .browser-results/report.json
             .browser-results/built-report.json
             .browser-results/lab-transport-probe-report.json
+            .browser-results/lab-compiled-startup-report.json
             .browser-results/kernel-signal-control.json
             .browser-results/*.png
             e2e/lab/.build/manifest.json

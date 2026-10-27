@@ -150,6 +150,23 @@ the native lab's existing Origin allowlist and can be refused before an RPC
 reply. That setup error is distinct from a validated socket dropping while
 the network service is replaced. The allowlist is never widened for a probe.
 
+The `info` case additionally makes 24 fresh production-bundle starts. It reuses
+the already built and hash-checked compiled scripts on their accepted origin,
+with the existing Go lab and no injected wallet. Its process/signal baseline
+precedes the first application navigation, matching the failing startup scope.
+The application itself sends its startup RPCs. Paired chain-322 frontier replies,
+an open first socket and the Anvil banner are required. A first socket error
+remains fatal even if the application subsequently reconnects. Console, CSP,
+outbound, process-replacement and diagnostic bounds remain enforced; the loop
+stops on its first failure and never retries a failed start. Its separate report
+does not replace the original compiled suite or the staged RPC probe.
+
+Signal reports also retain the helper's actual exit/signal and output
+completeness. A missing or nonzero helper outcome cannot produce a complete
+observation. An owned zygote or other browser descendant has its own sender
+category; it is not classified as an external actor merely because its process
+group differs from the main browser's.
+
 Native stack reports can distinguish fixed downloader wait sites only for the
 exact reviewed Go commit and built downloader file SHA-256. The EOF handoff and the hash reply/timeout select are
 separate categories, as are the first-worker and remaining-worker joins.

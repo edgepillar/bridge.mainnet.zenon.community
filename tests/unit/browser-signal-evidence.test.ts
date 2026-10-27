@@ -1,5 +1,5 @@
 import {expect,it} from 'vitest'
-import {sanitizeSignalReport} from '../../e2e/lib/browser-signal-evidence.ts'
+import {sanitizeSignalReport,completedSignalReport} from '../../e2e/lib/browser-signal-evidence.ts'
 const sample=()=>({status:'COMPLETE',scope:'OWNED_INITIAL_NETWORK_SERVICE_INITIAL_THREADS',events:[{signal:'SIGKILL',senderRole:'OWNED_BROWSER',codeClass:'SI_USER',generationResult:'ACCEPTED'}],truncated:false,parseErrors:0,rawTracePublished:false,injectedSignals:0,targetOwnershipVerified:true,observedInitialThreads:6,kernelBufferLosses:0,stopReason:'TARGET_EXIT_OR_REPLACED',maximumWindowSeconds:15})
 it('retains a generated signal category without claiming the initial IPC cause',()=>{
  expect(sanitizeSignalReport(sample()).events).toEqual(sample().events)
@@ -14,4 +14,15 @@ it('refuses unowned, truncated, injected and lossy completion claims',()=>{
 it('refuses unbounded or peer-controlled categories',()=>{
  for(const patch of [{signal:'private'},{senderRole:'private'},{codeClass:'private'},{generationResult:'private'}])expect(()=>sanitizeSignalReport({...sample(),events:[{...sample().events[0],...patch}]})).toThrow()
  expect(()=>sanitizeSignalReport({...sample(),events:Array(65).fill(sample().events[0])})).toThrow()
+})
+it('binds a complete kernel report to the actual helper exit',()=>{
+ expect(completedSignalReport(sample(),0,null)).toMatchObject({status:'COMPLETE',helperProcess:{state:'EXITED',actualExit:0,signal:null}})
+})
+it('does not promote a nonzero or signaled helper to complete',()=>{
+ expect(completedSignalReport(sample(),1,null)).toMatchObject({status:'UNAVAILABLE',helperProcess:{actualExit:1}})
+ expect(completedSignalReport(sample(),null,'SIGKILL')).toMatchObject({status:'UNAVAILABLE',helperProcess:{actualExit:null,signal:'SIGKILL'}})
+})
+it('keeps an unknown launch outcome and arbitrary signal private',()=>{
+ expect(completedSignalReport(sample(),null,null)).toMatchObject({status:'UNAVAILABLE',helperProcess:{state:'UNKNOWN'}})
+ expect(JSON.stringify(completedSignalReport(sample(),null,'synthetic-private-signal'))).not.toContain('synthetic-private')
 })

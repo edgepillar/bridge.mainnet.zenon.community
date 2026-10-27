@@ -39,6 +39,10 @@ class SignalTraceControls(unittest.TestCase):
         self.assertEqual(value['senderRole'], 'OWNED_NETWORK_SERVICE')
         self.assertFalse(any(token in str(value) for token in ['203', '304', 'synthetic']))
 
+    def test_an_owned_zygote_or_other_descendant_is_not_called_external(self):
+        value = watch.classify_line(self.line, {304}, 200, 304, lambda _: (250, 200, 1), lambda child, parent: child == 250 and parent == 200)
+        self.assertEqual(value['senderRole'], 'OWNED_BROWSER_DESCENDANT')
+
 
 if __name__ == '__main__':
     unittest.main()
