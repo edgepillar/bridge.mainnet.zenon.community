@@ -9,6 +9,7 @@ import { afterAll, beforeAll, expect, it } from 'vitest'
 import { build, preview, type PreviewServer } from 'vite'
 import puppeteer, { type Browser, type Page } from 'puppeteer-core'
 import { assertLab } from './lib/lab.ts'
+import { socketFailureClass } from './lib/socket-evidence.ts'
 
 const outDir='e2e/.state/browser-build', origin='http://127.0.0.1:5195'
 let server: PreviewServer, browser: Browser, page: Page
@@ -16,7 +17,8 @@ const errors:string[]=[], outbound:string[]=[], scripts=new Set<string>(), viola
 let initialScripts:string[]=[]
 let noticeEvidence={verified:false,packages:0,files:0,manifestSha256:''}
 // Keep bounded transport facts, never handshake headers or raw RPC frames.
-const socketEvidence:{allowed:boolean;status:number|null;error:boolean;closed:boolean;frontier:{chainId:number;height:number}|null}[]=[]
+const socketEvidence:{allowed:boolean;status:number|null;error:boolean;closed:boolean;frontier:{chainId:number;height:number}|null;
+  createdMs:number;handshakeMs:number|null;errorMs:number|null;closedMs:number|null;frontierMs:number|null;failureClass:string|null;frontierRequests:number}[]=[]
 const sha=(data:Buffer)=>crypto.createHash('sha256').update(data).digest('hex')
 beforeAll(async()=>{
   await assertLab()
@@ -36,18 +38,20 @@ beforeAll(async()=>{
   // HTTP readiness cannot prove the browser's WebSocket upgrade or RPC identity.
   const session=await page.createCDPSession()
   const sockets=new Map<string,{evidence:typeof socketEvidence[number];frontiers:Set<number>}>()
+  const started=performance.now(),elapsed=()=>Math.round(performance.now()-started)
   await session.send('Network.enable')
   session.on('Network.webSocketCreated',({requestId,url})=>{
     if(socketEvidence.length>=16){errors.push('Compiled browser exceeded the WebSocket evidence bound');return}
-    const evidence={allowed:url==='ws://127.0.0.1:46998/',status:null as number|null,error:false,closed:false,frontier:null as {chainId:number;height:number}|null}
+    const evidence={allowed:url==='ws://127.0.0.1:46998/',status:null as number|null,error:false,closed:false,frontier:null as {chainId:number;height:number}|null,
+      createdMs:elapsed(),handshakeMs:null as number|null,errorMs:null as number|null,closedMs:null as number|null,frontierMs:null as number|null,failureClass:null as string|null,frontierRequests:0}
     socketEvidence.push(evidence);sockets.set(requestId,{evidence,frontiers:new Set()})
     if(!evidence.allowed)outbound.push('UNEXPECTED_WEBSOCKET_ENDPOINT')
   })
   session.on('Network.webSocketHandshakeResponseReceived',({requestId,response})=>{
-    const socket=sockets.get(requestId);if(socket)socket.evidence.status=response.status
+    const socket=sockets.get(requestId);if(socket){socket.evidence.status=response.status;socket.evidence.handshakeMs=elapsed()}
   })
-  session.on('Network.webSocketFrameError',({requestId})=>{
-    const socket=sockets.get(requestId);if(socket)socket.evidence.error=true
+  session.on('Network.webSocketFrameError',({requestId,errorMessage})=>{
+    const socket=sockets.get(requestId);if(socket){socket.evidence.error=true;socket.evidence.errorMs=elapsed();socket.evidence.failureClass=socketFailureClass(errorMessage)}
   })
   session.on('Network.webSocketFrameSent',({requestId,response})=>{
     const socket=sockets.get(requestId);if(!socket||response.payloadData.length>64*1024)return
@@ -56,6 +60,7 @@ beforeAll(async()=>{
       if(frame?.method==='ledger.getFrontierMomentum'&&Number.isSafeInteger(frame.id)){
         if(socket.frontiers.size>=128){errors.push('Compiled browser exceeded the pending frontier evidence bound');return}
         socket.frontiers.add(frame.id)
+        socket.evidence.frontierRequests++
       }
     }catch{/* Only paired frontier identities are retained. */}
   })
@@ -65,11 +70,13 @@ beforeAll(async()=>{
       const frame=JSON.parse(response.payloadData)
       if(!socket.frontiers.delete(frame?.id))return
       const momentum=frame.result
-      if(!frame.error&&Number.isSafeInteger(momentum?.chainIdentifier)&&Number.isSafeInteger(momentum?.height)&&/^[0-9a-f]{64}$/i.test(momentum?.hash))socket.evidence.frontier={chainId:momentum.chainIdentifier,height:momentum.height}
+      if(!frame.error&&Number.isSafeInteger(momentum?.chainIdentifier)&&Number.isSafeInteger(momentum?.height)&&/^[0-9a-f]{64}$/i.test(momentum?.hash)){
+        socket.evidence.frontier={chainId:momentum.chainIdentifier,height:momentum.height};socket.evidence.frontierMs=elapsed()
+      }
     }catch{/* Malformed or unrelated frames cannot establish readiness. */}
   })
   session.on('Network.webSocketClosed',({requestId})=>{
-    const socket=sockets.get(requestId);if(socket){socket.evidence.closed=true;socket.frontiers.clear()}
+    const socket=sockets.get(requestId);if(socket){socket.evidence.closed=true;socket.evidence.closedMs=elapsed();socket.frontiers.clear()}
   })
   await page.exposeFunction('__labPolicyViolation',(directive:string)=>violations.push(directive))
   await page.evaluateOnNewDocument(()=>document.addEventListener('securitypolicyviolation',(event)=>(window as any).__labPolicyViolation(event.effectiveDirective)))
