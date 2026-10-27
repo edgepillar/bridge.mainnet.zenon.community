@@ -130,6 +130,26 @@ Unknown browser revisions, schemas, deadlines and non-monotone samples remain
 unavailable. Identifiers, paths, arbitrary histogram names and raw query errors
 are excluded. Unexpected socket/console errors remain fatal.
 
+The pinned Linux implementation can send `SIGKILL` itself when querying a
+[disconnected child's known-dead status](https://github.com/chromium/chromium/blob/3ff7ac5a9224be9156d7f8703a06e22890aafd34/base/process/kill_posix.cc#L82).
+A killed-counter delta therefore does not prove an external actor or OOM.
+The `info` native CI case calibrates a separate owned kernel signal observer
+using one deliberate `SIGTERM` to its own disposable Python child. It then
+observes each compiled/probe browser's initial network-service threads in a fresh,
+recipient-filtered tracefs instance. Only fixed signal, sender-role and
+generation-result categories enter the report. No raw trace, process/thread ID,
+command, executable or path is uploaded. Buffer loss, bounds, identity or
+permission failures remain explicit. The observer stops before intentional
+browser teardown and removes only its own tracing instance. It neither signals
+the natural browser nor changes its sandbox or RPC policy. Signal generation
+is positive evidence; it does not establish why an earlier IPC pipe closed.
+
+Actual-Go transport probes reuse the already accepted compiled fixture origin
+`http://127.0.0.1:5195` after that fixture closes. A random web port is not in
+the native lab's existing Origin allowlist and can be refused before an RPC
+reply. That setup error is distinct from a validated socket dropping while
+the network service is replaced. The allowlist is never widened for a probe.
+
 Native stack reports can distinguish fixed downloader wait sites only for the
 exact reviewed Go commit and built downloader file SHA-256. The EOF handoff and the hash reply/timeout select are
 separate categories, as are the first-worker and remaining-worker joins.

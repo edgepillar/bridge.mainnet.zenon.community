@@ -16,6 +16,7 @@ import { browserProcessEvidence } from './lib/browser-process-evidence.ts'
 import { browserStderrEvidence } from './lib/browser-stderr-evidence.ts'
 import { browserTerminationEvidence } from './lib/browser-termination-evidence.ts'
 import { browserMemoryEvidence } from './lib/browser-memory-evidence.ts'
+import { browserSignalEvidence } from './lib/browser-signal-evidence.ts'
 
 const outDir='e2e/.state/browser-build', origin='http://127.0.0.1:5195'
 const netLogFile='e2e/.state/compiled-netlog.private.json'
@@ -27,6 +28,7 @@ let processEvidence: Awaited<ReturnType<typeof browserProcessEvidence>>, browser
 const pendingProcessEvidence: Promise<void>[] = []
 let terminationEvidence:Awaited<ReturnType<typeof browserTerminationEvidence>>|undefined
 let memoryEvidence:ReturnType<typeof browserMemoryEvidence>|undefined
+let signalEvidence:Awaited<ReturnType<typeof browserSignalEvidence>>|undefined
 let stderrEvidence = browserStderrEvidence(false)
 let ownedBrowserStderr: Readable | null | undefined
 const captureBrowserStderr = (chunk: Buffer) => stderrEvidence.ingest(chunk)
@@ -132,6 +134,7 @@ beforeAll(async()=>{
     else{outbound.push(url.origin);void request.abort()}
   })
   page.on('response',(response)=>{const url=new URL(response.url());if(url.origin===origin&&url.pathname.endsWith('.js'))scripts.add(url.pathname)})
+  signalEvidence=await browserSignalEvidence(browser.process()?.pid,()=>browserSession.send('SystemInfo.getProcessInfo'))
   await page.goto(origin,{waitUntil:'networkidle0'})
   await page.waitForFunction(()=>document.body.innerText.includes('Anvil'),{timeout:60_000})
   initialScripts=[...scripts].sort()
@@ -148,6 +151,8 @@ afterAll(async()=>{
   const browserTerminationDiagnostics=terminationEvidence?.report()??{status:'UNAVAILABLE'}
   const browserProcessDiagnostics=processEvidence?.report()??{status:'UNAVAILABLE'}
   const browserStderrDiagnostics=stderrEvidence.report()
+  await signalEvidence?.stop()
+  const browserSignalDiagnostics=signalEvidence?.report()??{status:'UNAVAILABLE'}
   const child=browser?.process()
   const ownedBrowserState=child ? {status:child.exitCode===null&&child.signalCode===null?'RUNNING':'EXITED',
     exitCode:child.exitCode,signal:child.signalCode===null?null:['SIGKILL','SIGTERM','SIGABRT','SIGSEGV'].includes(child.signalCode)?child.signalCode:'OTHER'} : {status:'UNAVAILABLE'}
@@ -171,7 +176,7 @@ afterAll(async()=>{
   }
   const report={mode:'isolated read-only production bundle',network:'devnet',sourceCommit:execFileSync('git',['rev-parse','HEAD']).toString().trim(),
     sourceTree:execFileSync('git',['rev-parse','HEAD^{tree}']).toString().trim(),lockfileHash:sha(fs.readFileSync('package-lock.json')),
-    sourceDirty:execFileSync('git',['status','--porcelain']).toString().trim().length>0,browserVersion,browserRevision,browserProcessDiagnostics,browserTerminationDiagnostics,browserMemoryDiagnostics,browserStderrDiagnostics,ownedBrowserState,browserCloseStatus,errors:errorSnapshot,outbound:outboundSnapshot,violations:violationSnapshot,
+    sourceDirty:execFileSync('git',['status','--porcelain']).toString().trim().length>0,browserVersion,browserRevision,browserProcessDiagnostics,browserTerminationDiagnostics,browserMemoryDiagnostics,browserStderrDiagnostics,browserSignalDiagnostics,ownedBrowserState,browserCloseStatus,errors:errorSnapshot,outbound:outboundSnapshot,violations:violationSnapshot,
     initialScripts:initialScripts.map((name)=>{const bytes=fs.readFileSync(path.join(outDir,name));return {name,bytes:bytes.length,gzipBytes:gzipSync(bytes).length,sha256:sha(bytes)}}),loadedScriptNames,noticeEvidence,socketEvidence:socketSnapshot,transportEvidence,nativeDiagnostics}
   fs.mkdirSync('.browser-results',{recursive:true});fs.writeFileSync('.browser-results/built-report.json',JSON.stringify(report,null,2)+'\n')
   await new Promise<void>((resolve)=>server?.httpServer.close(()=>resolve())??resolve())

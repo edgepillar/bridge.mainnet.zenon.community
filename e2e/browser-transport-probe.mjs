@@ -9,6 +9,8 @@ import {fileURLToPath,pathToFileURL} from 'node:url'
 import {verifyProbePackage} from './lib/probe-package-lock.mjs'
 import {probeLedgerRound} from './lib/probe-ledger-round.mjs'
 import {verifiedBuild} from './lab/verify-build.mjs'
+import {socketFailureClass} from './lib/socket-evidence.ts'
+import {browserSignalEvidence} from './lib/browser-signal-evidence.ts'
 const repo=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..')
 const ci=process.env.GITHUB_ACTIONS==='true',parent=process.env.SPV_TASK_SCRATCH??(ci?process.env.RUNNER_TEMP:undefined)
 if(!parent||!path.isAbsolute(parent)||!fs.statSync(parent).isDirectory())throw Error('Owned experiment scratch is required')
@@ -23,7 +25,7 @@ if(fs.existsSync(reportFile))throw Error('Reconcile the existing report before a
 fs.mkdirSync(path.dirname(reportFile),{recursive:true})
 const sha=b=>crypto.createHash('sha256').update(b).digest('hex')
 const lockBytes=fs.readFileSync(path.join(repo,'package-lock.json')),lock=JSON.parse(lockBytes)
-const sourceFiles=Object.fromEntries(['e2e/browser-transport-probe.mjs','e2e/lib/probe-ledger-round.mjs','e2e/lib/probe-package-lock.mjs','e2e/lib/browser-termination-evidence.ts','e2e/lib/browser-memory-evidence.ts','e2e/lib/browser-stderr-evidence.ts'].map(n=>[n,sha(fs.readFileSync(path.join(repo,n)))]))
+const sourceFiles=Object.fromEntries(['e2e/browser-transport-probe.mjs','e2e/lib/probe-ledger-round.mjs','e2e/lib/probe-package-lock.mjs','e2e/lib/browser-termination-evidence.ts','e2e/lib/browser-memory-evidence.ts','e2e/lib/browser-stderr-evidence.ts','e2e/lib/socket-evidence.ts','e2e/lib/browser-signal-evidence.ts','e2e/lib/browser-signal-watch.py'].map(n=>[n,sha(fs.readFileSync(path.join(repo,n)))]))
 const memoryModule=await import(pathToFileURL(path.join(repo,'e2e/lib/browser-memory-evidence.ts')).href)
 const stderrModule=await import(pathToFileURL(path.join(repo,'e2e/lib/browser-stderr-evidence.ts')).href)
 const binaryHash=()=>{const file=process.env.CHROME_PATH,st=fs.lstatSync(file);if(!st.isFile()||st.isSymbolicLink()||st.size>1024**3)throw Error('Browser executable refused');const h=crypto.createHash('sha256'),fd=fs.openSync(file,'r'),buffer=Buffer.alloc(128*1024);try{for(;;){const n=fs.readSync(fd,buffer,0,buffer.length,null);if(!n)break;h.update(buffer.subarray(0,n))}}finally{fs.closeSync(fd)}return h.digest('hex')}
@@ -35,7 +37,7 @@ if(ci){verifyProbePackage(lock.packages,resolvedPuppeteer,actualPuppeteer);verif
 const {browserTerminationEvidence}=await import(pathToFileURL(path.join(repo,'e2e/lib/browser-termination-evidence.ts')).href)
 const payload=(id,size)=>{const start=JSON.stringify({jsonrpc:'2.0',id,result:{padding:''}});return Buffer.from(start.replace('"padding":""','"padding":"'+'x'.repeat(size-Buffer.byteLength(start))+'"'))}
 const frame=(opcode,fin,data)=>{const h=Buffer.alloc(data.length<126?2:4);h[0]=(fin?128:0)|opcode;if(data.length<126)h[1]=data.length;else{h[1]=126;h.writeUInt16BE(data.length,2)}return Buffer.concat([h,data])}
-let browser,server,wss,currentTrial,currentMemory,currentStderr,currentTermination
+let browser,server,wss,currentTrial,currentMemory,currentStderr,currentTermination,currentSignal
 const sourceCommit=execFileSync('git',['rev-parse','HEAD'],{cwd:repo}).toString().trim(),sourceTree=execFileSync('git',['rev-parse','HEAD^{tree}'],{cwd:repo}).toString().trim()
 let goIdentity=null
 if(labMode){
@@ -62,12 +64,14 @@ try{
   else socket._socket.write(frame(1,true,data))
  }).catch(()=>{if(!socket._socket.destroyed)socket._socket.destroy()})})})
  }
- await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve)});const origin='http://127.0.0.1:'+server.address().port
+ // Native RPC already permits the compiled fixture's origin. Reuse it after
+ // that fixture has closed; never widen its Origin policy for this probe.
+ await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(labMode?5195:0,'127.0.0.1',resolve)});const origin='http://127.0.0.1:'+server.address().port
  const started=Date.now()
  for(let index=0;index<planned;index++){
   if(Date.now()-started>150000)throw Error('Experiment time bound')
   const mode=labMode?'GO_RPC_STAGED':['SINGLE_FINAL','EMPTY_FINAL','EMPTY_FINAL_SPLIT'][index%3],interception=index%2===0
-  const trial={index,mode,interception,expectedMessages:13,frameErrors:0,emptyFrameErrors:0,consoleErrors:0,networkServiceChanged:null}
+  const trial={index,mode,interception,expectedMessages:13,frameErrors:0,emptyFrameErrors:0,failureClasses:[],handshakeStatus:null,consoleErrors:0,networkServiceChanged:null}
   currentTrial=trial
   currentStderr=undefined;currentTermination=undefined
   const profile=path.join(work,'profile-'+index),memory=memoryModule.browserMemoryEvidence()
@@ -103,7 +107,9 @@ try{
   trial.initialUtilityFault=initial.status!=='COMPLETE'||Object.values(initial.counts).some(x=>x>0)
   trial.networkServicesBefore=baseline.size
   if(baseline.size!==1)throw Error('Network service baseline refused')
-  session.on('Network.webSocketFrameError',e=>{trial.frameErrors++;if(e.errorMessage==='')trial.emptyFrameErrors++;termination.markFailure()})
+  session.on('Network.webSocketHandshakeResponseReceived',e=>{trial.handshakeStatus=e.response.status})
+  session.on('Network.webSocketFrameError',e=>{trial.frameErrors++;if(e.errorMessage==='')trial.emptyFrameErrors++;if(trial.failureClasses.length<4)trial.failureClasses.push(socketFailureClass(e.errorMessage));termination.markFailure()})
+  currentSignal=await browserSignalEvidence(browser.process()?.pid,()=>bs.send('SystemInfo.getProcessInfo'))
   trial.client=labMode?await page.evaluate(probeLedgerRound,'ws://127.0.0.1:46998/'):await page.evaluate(async(mode)=>await new Promise(resolve=>{
    const socket=new WebSocket(location.origin.replace('http:','ws:')),received=new Set();let errors=0,invalid=0,settled=false
    const finish=()=>{if(!settled){settled=true;resolve({received:received.size,errors,invalid,open:socket.readyState===WebSocket.OPEN});socket.close(1000,'control complete')}}
@@ -113,6 +119,7 @@ try{
    function validReply(x){return x.jsonrpc==='2.0'&&typeof x.result?.padding==='string'}
    socket.onerror=()=>{errors++};socket.onclose=()=>{if(received.size<13){clearTimeout(timer);finish()}}
   }),mode)
+  await currentSignal.stop();trial.signalObservation=currentSignal.report();currentSignal=undefined
   await termination.captureAfterFailures();trial.termination=termination.report()
   try{const after=await pids();trial.networkServicesAfter=after.size;trial.networkServiceChanged=baseline.size!==after.size||[...baseline].some(x=>!after.has(x))}catch{trial.networkServiceChanged=null}
   const stderrFacts=stderr.report()
@@ -129,6 +136,7 @@ try{
 }catch{
  result.status='CONTROL_FAILURE';result.failureCode='OWNED_EXPERIMENT_INCOMPLETE'
  if(currentTrial&&!result.trials.includes(currentTrial)){
+  await currentSignal?.stop();currentTrial.signalObservation=currentSignal?.report()??{status:'UNAVAILABLE'};currentSignal=undefined
   currentMemory?.captureAfterFailure();currentTrial.memory=currentMemory?.report()??{status:'UNAVAILABLE'}
   currentTrial.stderr=currentStderr?.report()??{status:'UNAVAILABLE'}
   await currentTermination?.captureAfterFailures();currentTrial.termination=currentTermination?.report()??{status:'UNAVAILABLE'}

@@ -9,6 +9,7 @@ export function socketFailureClass(message: string): string {
   if (/previous message.*unfinished|new message.*unfinished/i.test(message)) return 'UNFINISHED_MESSAGE'
   if (/control.*fragment|control.*not final/i.test(message)) return 'FRAGMENTED_CONTROL_FRAME'
   if (/invalid.*close|reserved status code/i.test(message)) return 'INVALID_CLOSE_FRAME'
+  if (/Unexpected response code: 403/i.test(message)) return 'HANDSHAKE_FORBIDDEN'
   if (/ERR_CONNECTION_REFUSED/.test(message)) return 'CONNECTION_REFUSED'
   if (/ERR_CONNECTION_RESET/.test(message)) return 'CONNECTION_RESET'
   if (/ERR_CONNECTION_CLOSED/.test(message)) return 'CONNECTION_CLOSED'

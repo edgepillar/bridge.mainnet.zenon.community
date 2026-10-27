@@ -23,6 +23,7 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
+      - run: python3 -B -m unittest discover -s e2e/lib -p 'browser_signal_watch_test.py'
       - run: npm run lint
       - run: npm run test:coverage
       - run: npm audit --audit-level=low
@@ -154,6 +155,7 @@ jobs:
       LAB_COLD_CASE: ${{ matrix.sync_case }}
       LAB_RPC_LOG_LEVEL: ${{ matrix.sync_case == 'info' && 'info' || 'error' }}
       LAB_RPC_PROFILE_MODE: ${{ matrix.sync_case == 'error-b' && 'postmortem' || 'loopback' }}
+      BROWSER_SIGNAL_TRACE: ${{ matrix.sync_case == 'info' && '1' || '0' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -195,6 +197,15 @@ jobs:
           sudo install -m 0644 .lab-tools/browser.apparmor /etc/apparmor.d/bridge-qualification-browser
           sudo apparmor_parser --replace /etc/apparmor.d/bridge-qualification-browser
       - run: npm run lab:build:native
+      - name: Calibrate the owned kernel signal observer
+        if: matrix.sync_case == 'info'
+        run: |
+          if ! sudo mountpoint -q /sys/kernel/tracing; then
+            sudo mount -t tracefs tracefs /sys/kernel/tracing
+          fi
+          test "$(sudo findmnt -n -o FSTYPE --target /sys/kernel/tracing)" = tracefs
+          mkdir -p .browser-results
+          sudo -n python3 -B e2e/lib/browser-signal-watch.py --self-test > .browser-results/kernel-signal-control.json
       - name: Reproduce and qualify downloader phase isolation
         if: matrix.sync_case == 'error-b'
         run: node e2e/lab/downloader-phase-control.mjs
@@ -215,6 +226,7 @@ jobs:
             .browser-results/report.json
             .browser-results/built-report.json
             .browser-results/lab-transport-probe-report.json
+            .browser-results/kernel-signal-control.json
             .browser-results/*.png
             e2e/lab/.build/manifest.json
             e2e/lab/.build/downloader-control-report.json
