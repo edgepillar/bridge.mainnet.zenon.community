@@ -112,6 +112,7 @@ jobs:
       EXPECTED_BROWSER_VERSION: 155.0.8059.39
       LAB_COLD_CASE: ${{ matrix.sync_case }}
       LAB_RPC_LOG_LEVEL: ${{ matrix.sync_case == 'info' && 'info' || 'error' }}
+      LAB_RPC_PROFILE_MODE: ${{ matrix.sync_case == 'error-b' && 'postmortem' || 'loopback' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

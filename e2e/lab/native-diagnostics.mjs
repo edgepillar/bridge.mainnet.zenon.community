@@ -42,7 +42,7 @@ export function summarizeGoroutines(text){
   if(Buffer.byteLength(text)>2*1024*1024)throw new Error('Native profile bound exceeded')
   const groups=new Map();let observed=0,truncated=false
   for(const block of text.split(/\n\n/)){
-    const header=block.match(/^goroutine \d+ \[([^\]]+)\]:/);if(!header)continue
+    const header=block.match(/^goroutine \d+(?: [^\n[\]]{1,160})? \[([^\]\n]{1,160})\]:/);if(!header)continue
     if(++observed>2048){truncated=true;break}
     const state=/semacquire|Mutex\.(?:R?Lock)/.test(header[1])?'LOCK_WAIT':/chan send/.test(header[1])?'CHANNEL_SEND':/chan receive/.test(header[1])?'CHANNEL_RECEIVE':/IO wait/.test(header[1])?'IO_WAIT':/^select/.test(header[1])?'SELECT':/^running/.test(header[1])?'RUNNING':/^runnable/.test(header[1])?'RUNNABLE':/^sleep/.test(header[1])?'SLEEP':'OTHER'
     const frames=[]
@@ -59,9 +59,10 @@ export function summarizeGoroutines(text){
 }
 export async function collectNativeFailureFacts({runtime,build,head,tree,readProfile,readLogs}){
   const r=object(runtime),b=object(build),d=object(r.diagnostics)
-  if(!sha.test(head??'')||!sha.test(tree??'')||!digest.test(b.key??'')||!digest.test(b.binaryHash??'')||!sha.test(b.sourceCommit??'')||!sha.test(b.sourceTree??'')||r.bridgeSourceCommit!==head||r.bridgeSourceTree!==tree||r.buildKey!==b.key||r.znndHash!==b.binaryHash||r.sourceCommit!==b.sourceCommit||r.sourceTree!==b.sourceTree||d.profileHost!=='127.0.0.1'||d.profilePort!==47210||!['error','info'].includes(d.rpcLogLevel))return {status:'OWNER_SCOPE_UNAVAILABLE'}
+  const mode=d.profileMode??'loopback',profileOwner=mode==='loopback'?d.profileHost==='127.0.0.1'&&d.profilePort===47210:mode==='postmortem'&&d.profileHost===null&&d.profilePort===null
+  if(!sha.test(head??'')||!sha.test(tree??'')||!digest.test(b.key??'')||!digest.test(b.binaryHash??'')||!sha.test(b.sourceCommit??'')||!sha.test(b.sourceTree??'')||r.bridgeSourceCommit!==head||r.bridgeSourceTree!==tree||r.buildKey!==b.key||r.znndHash!==b.binaryHash||r.sourceCommit!==b.sourceCommit||r.sourceTree!==b.sourceTree||!profileOwner||!['error','info'].includes(d.rpcLogLevel))return {status:'OWNER_SCOPE_UNAVAILABLE'}
   let profile={status:'UNAVAILABLE'},logs={status:'UNAVAILABLE'}
   try{profile=summarizeGoroutines(await readProfile())}catch{/* Unavailable is not evidence of a healthy importer. */}
   try{logs=await readLogs()}catch{/* No raw filesystem or peer error is retained. */}
-  return {status:profile.status==='CAPTURED'?'CAPTURED':'PARTIAL',rpcLogLevel:d.rpcLogLevel,coldCase:['error-a','error-b','info'].includes(d.coldCase)?d.coldCase:'manual',profile,logs}
+  return {status:profile.status==='CAPTURED'?'CAPTURED':'PARTIAL',profileMode:mode,rpcLogLevel:d.rpcLogLevel,coldCase:['error-a','error-b','info'].includes(d.coldCase)?d.coldCase:'manual',profile,logs}
 }

@@ -9,6 +9,7 @@
 // Native and Docker qualification require five exact-height hash matches.
 import fs from 'node:fs'
 import { execFileSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { readyAtFrontier, readinessFailureDiagnostics } from './readiness.mjs'
 const args = process.argv.slice(2)
 const waitAt = args.indexOf('--wait')
@@ -131,6 +132,10 @@ if (args.includes('--native') || args.includes('--docker')) {
           const runtime = JSON.parse(fs.readFileSync(runtimeFile)), build = verifiedBuild('native')
           report.nativeFailure = await collectNativeFailureFacts({ runtime, build, head: report.sourceCommit, tree: report.sourceTree,
             readProfile: async () => {
+              if (runtime.diagnostics?.profileMode === 'postmortem') {
+                const { requestOwnedPostmortem, identityForPostmortem } = await import('./native-postmortem.mjs')
+                return requestOwnedPostmortem({ directory: fileURLToPath(root), identity: identityForPostmortem({ head: report.sourceCommit, tree: report.sourceTree, build }) })
+              }
               const r = await fetch('http://127.0.0.1:47210/debug/pprof/goroutine?debug=2', { signal: AbortSignal.timeout(3000) })
               if (!r.ok || !r.body) throw new Error('Profile unavailable')
               const reader = r.body.getReader(), chunks = []; let size = 0

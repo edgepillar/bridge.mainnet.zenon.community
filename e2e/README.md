@@ -31,14 +31,25 @@ has its own runner, chain and artifact; every failure stays failed. There is no
 warm restart or successful-case substitution. The 600-second, minimum-height,
 depth and exact five-node convergence requirements are unchanged.
 
+The `error-b` case keeps the original Go startup without a profiling listener.
+Only after an actual readiness refusal and its read-only peer/hash snapshot,
+the source-bound supervisor may signal its exact owned RPC child with SIGQUIT
+for a postmortem. A private per-start challenge, exact source/build identity,
+one-shot request and verified child exit bind the capture. It stops this
+already-failed isolated fixture; the original failure remains fatal. This
+separates startup profiling from the unprofiled failure being investigated.
+The `error-a` and `info` cases retain a loopback-only profiling listener for
+comparison. No case signals a PID supplied by a request.
+
 After preserving a native readiness failure, the report compares all five
 hashes at the lowest observed frontier, in addition to height two. It also
-collects a bounded loopback-only profile from the source-bound isolated RPC
-process and fixed log categories. Only public Go function names, wait classes,
+collects a bounded loopback profile or owned-child postmortem from the isolated
+RPC process and fixed log categories. Only public Go function names, wait classes,
 counts and numeric heights leave the parser. Raw profiles/logs, goroutine IDs,
 pointer arguments, peer data and paths are excluded. Missing ownership or
-incomplete diagnostic data stays unavailable. Successful readiness performs
-no profile or diagnostic-log reads. These diagnostics do not fix or establish
+incomplete diagnostic data stays unavailable. Private control files and raw
+stderr are excluded from uploaded evidence. Successful readiness performs
+no profile reads, postmortem requests/signals or diagnostic-log reads. These diagnostics do not fix or establish
 the historical sync-lag cause by themselves.
 Peer identities, addresses, names and raw RPC errors are excluded. These
 failure-only reads do not extend the qualification window, restart nodes or

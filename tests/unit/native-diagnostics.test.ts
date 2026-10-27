@@ -47,3 +47,11 @@ it('captures an owned runtime while excluding raw profile and query errors',asyn
   const unavailable=await collectNativeFailureFacts({...owner(),readProfile:async()=>{throw Error('PRIVATE_ENDPOINT')},readLogs:async()=>{throw Error('PRIVATE_PATH')}})
   expect(unavailable.status).toBe('PARTIAL');expect(JSON.stringify(unavailable)).not.toContain('PRIVATE')
 })
+it('supports unprofiled startup only with the exact postmortem owner fields',async()=>{
+ const original=owner(),runtime={...original.runtime,diagnostics:{...original.runtime.diagnostics,profileMode:'postmortem',profileHost:null,profilePort:null}}
+ const result=await collectNativeFailureFacts({...original,runtime,readProfile:async()=>profile,readLogs:async()=>({})})
+ expect(result).toMatchObject({status:'CAPTURED',profileMode:'postmortem'})
+ let reads=0
+ const refused=await collectNativeFailureFacts({...original,runtime:{...runtime,diagnostics:{...runtime.diagnostics,profileHost:'127.0.0.1'}},readProfile:async()=>{reads++;return profile},readLogs:async()=>{reads++;return {}}})
+ expect(refused.status).toBe('OWNER_SCOPE_UNAVAILABLE');expect(reads).toBe(0)
+})
