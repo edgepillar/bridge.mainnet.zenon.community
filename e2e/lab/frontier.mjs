@@ -9,7 +9,7 @@
 // Native and Docker qualification require five exact-height hash matches.
 import fs from 'node:fs'
 import { execFileSync } from 'node:child_process'
-import { readyAtFrontier } from './readiness.mjs'
+import { readyAtFrontier, readinessFailureDiagnostics } from './readiness.mjs'
 const args = process.argv.slice(2)
 const waitAt = args.indexOf('--wait')
 const wait = waitAt >= 0 ? Number(args.splice(waitAt, 2)[1]) : 0
@@ -94,7 +94,31 @@ if (args.includes('--native') || args.includes('--docker')) {
     agreed = matches ? agreed + 1 : 0
     report.rounds.push({ elapsedMs: Date.now() - readinessStarted, anchorHeight: frontierNow.height, targetHeight, agreed, nodes })
     record()
-    if (Date.now() > end) { report.status = 'FAILURE'; record(); throw new Error('Lab nodes did not converge within the qualification window; inspect readiness-report.json') }
+    if (Date.now() > end) {
+      report.status = 'FAILURE'; record()
+      // Preserve the refusal before diagnostics. These bounded reads do not
+      // extend qualification, restart a node or release fixture publications.
+      report.failureDiagnostics = await readinessFailureDiagnostics(async (port, method, params) => {
+        const r = await fetch(`http://127.0.0.1:${port}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }), signal: AbortSignal.timeout(2000) })
+        if (!r.ok || !r.body) throw new Error('Diagnostic RPC unavailable')
+        const reader = r.body.getReader(), chunks = []
+        let bytes = 0
+        try {
+          for (;;) {
+            const part = await reader.read()
+            if (part.done) break
+            bytes += part.value.length
+            if (bytes > 64 * 1024) throw new Error('Diagnostic response byte bound')
+            chunks.push(Buffer.from(part.value))
+          }
+        } finally { await reader.cancel() }
+        const p = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+        if (p.id !== 1 || p.error || !('result' in p)) throw new Error('Diagnostic RPC failed')
+        return p.result
+      })
+      record()
+      throw new Error('Lab nodes did not converge within the qualification window; inspect readiness-report.json')
+    }
     if (agreed < 3) await pause(10)
   }
   qualified = true

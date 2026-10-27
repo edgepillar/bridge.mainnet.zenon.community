@@ -21,6 +21,13 @@ npm run test:e2e
 
 Readiness must succeed before the tests. It checks production and agreement across five nodes. The supervisor binds loopback only, fails when a child exits, and records the source/build, binary, Anvil, genesis and config identities. An existing native chain with different inputs is refused; archive its generated `.build/native` evidence and create a fresh isolated chain. Do not reuse unknown fixture publications with a different lab state. Short reorg failures are retained, not re-signed away.
 
+On a convergence timeout, the failure report additionally records bounded
+read-only peer counts, numeric sync state/heights and each node's height-two
+momentum hash. Missing or malformed diagnostic data remains unavailable.
+Peer identities, addresses, names and raw RPC errors are excluded. These
+failure-only reads do not extend the qualification window, restart nodes or
+permit fixture writes.
+
 ## Docker lab
 
 ```sh
