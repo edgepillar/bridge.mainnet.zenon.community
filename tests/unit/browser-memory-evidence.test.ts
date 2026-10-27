@@ -1,5 +1,5 @@
 import {expect,it} from 'vitest'
-import {browserMemoryEvidence} from '../../e2e/lib/browser-memory-evidence.ts'
+import {browserMemoryEvidence,readCurrentCgroupMemory} from '../../e2e/lib/browser-memory-evidence.ts'
 
 it('captures bounded hierarchical memory deltas once without process attribution',()=>{
  let calls=0
@@ -26,4 +26,18 @@ it('does not infer a delta from decreasing or unavailable counters',()=>{
  const values=['oom 2\noom_kill 1\n','oom 1\noom_kill 1\n']
  const e=browserMemoryEvidence(()=>values.shift()!);e.captureAfterFailure();expect(e.report().delta).toBeNull()
  const other=browserMemoryEvidence(()=>{throw Error('unavailable')});other.captureAfterFailure();expect(other.report().delta).toBeNull()
+})
+it('reads the inherited non-root memory controller and omits its private path from evidence',()=>{
+ const seen:string[]=[],read=(file:string)=>{seen.push(file);return file==='/proc/self/cgroup'?'0::/system.slice/synthetic.service\n':'oom 0\noom_kill 0\n'}
+ const e=browserMemoryEvidence(()=>readCurrentCgroupMemory(read))
+ expect(seen).toEqual(['/proc/self/cgroup','/sys/fs/cgroup/system.slice/synthetic.service/memory.events'])
+ expect(e.report().baseline.status).toBe('COMPLETE');expect(JSON.stringify(e.report())).not.toContain('synthetic.service')
+})
+it('refuses ambiguous, oversized or escaping membership without reading another filesystem path',()=>{
+ for(const membership of ['0::/../PRIVATE\n','0::/a\n0::/b\n','1:memory:/a\n','0::/'+'x'.repeat(4096)]){
+  const seen:string[]=[],read=(file:string)=>{seen.push(file);return membership}
+  const e=browserMemoryEvidence(()=>readCurrentCgroupMemory(read))
+  expect(e.report().baseline.status).toBe('UNAVAILABLE');expect(seen).toEqual(['/proc/self/cgroup'])
+  expect(JSON.stringify(e.report())).not.toContain('PRIVATE')
+ }
 })

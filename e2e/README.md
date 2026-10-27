@@ -198,9 +198,9 @@ Socket or console errors, unexpected service replacement and incomplete controls
 fail the job. It sends no injected signals and uses no wallet or chain.
 
 The report binds source/tree/file/lock/runtime identities and retains fixed
-utility-termination, stderr and hierarchical cgroup-memory facts. Raw lines,
+utility-termination, stderr and inherited cgroup-memory facts. Raw lines,
 identifiers, profiles and paths are excluded. The cgroup counters cover the whole
-hierarchy; utility counters cover all utilities. Neither alone identifies a
+process's cgroup hierarchy; utility counters cover all utilities. Neither alone identifies a
 particular process or establishes why it exited. Current compiled native/Docker
 checks also capture memory facts after a transport error, before browser teardown.
 

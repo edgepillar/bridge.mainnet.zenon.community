@@ -1,12 +1,23 @@
 import fs from 'node:fs'
+import path from 'node:path'
 
 const names=['low','high','max','oom','oom_kill','oom_group_kill'] as const
 type Counts=Partial<Record<typeof names[number],number>>
 type Sample={status:'COMPLETE';counts:Counts}|{status:'UNAVAILABLE';reason:'READ_FAILED'|'INVALID_SCHEMA'}
 
-// These hierarchical counters cover the runner cgroup, not a particular PID.
+export function readCurrentCgroupMemory(readFile:(file:string)=>string=file=>fs.readFileSync(file,'utf8')){
+ const membership=readFile('/proc/self/cgroup')
+ if(Buffer.byteLength(membership)>4096)throw Error('Cgroup membership refused')
+ const matches=[...membership.matchAll(/^0::(\/[^\0\r\n]*)$/gm)]
+ if(matches.length!==1||matches[0][1].split('/').some(part=>part==='.'||part==='..'))throw Error('Cgroup membership refused')
+ // Keep the discovered path private. Root cgroups may have no memory.events;
+ // the process's inherited cgroup is the relevant controller when available.
+ return readFile(path.join('/sys/fs/cgroup',matches[0][1].slice(1),'memory.events'))
+}
+
+// These hierarchical counters cover the process cgroup, not a particular PID.
 // Read only at the two experiment boundaries; never retain a path or raw error.
-export function browserMemoryEvidence(read:()=>string=()=>fs.readFileSync('/sys/fs/cgroup/memory.events','utf8')){
+export function browserMemoryEvidence(read:()=>string=()=>readCurrentCgroupMemory()){
  const sample=():Sample=>{
   let text:string
   try{text=read()}catch{return {status:'UNAVAILABLE',reason:'READ_FAILED'}}
@@ -37,6 +48,6 @@ export function browserMemoryEvidence(read:()=>string=()=>fs.readFileSync('/sys/
     delta=difference
    }
   },
-  report:()=>({scope:'CGROUP_ROOT_HIERARCHY' as const,attribution:'NOT_PROCESS_SPECIFIC' as const,baseline,sample:after,delta}),
+  report:()=>({scope:'CURRENT_PROCESS_CGROUP_HIERARCHY' as const,attribution:'NOT_PROCESS_SPECIFIC' as const,baseline,sample:after,delta}),
  }
 }
