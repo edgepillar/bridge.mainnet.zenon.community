@@ -55,6 +55,17 @@ transport reports exclude raw NetLog, headers, cookies and RPC payloads. A
 passing reconnect control does not establish the cause of an earlier unexpected
 transport failure.
 
+The compiled-browser report also records the browser revision and a bounded
+network-service inventory before navigation. Only a WebSocket error triggers
+another inventory; there is no idle polling. Reports retain service counts and
+whether the observed service set changed, excluding process identifiers,
+command lines and raw query errors. Missing, malformed or timed-out evidence
+leaves the comparison unknown. An empty browser error has its own fixed category.
+A deliberately terminated network utility can produce the same empty error
+signature while the browser remains usable, even with NetLog enabled; a missing
+NetLog connection graph therefore remains incomplete evidence. A matching
+injected signature alone does not establish the cause of a historical failure.
+
 A known pre-publication validation rejection archives the matching signed fixture
 under `e2e/.state/rejected/` and releases its pending slot. The startup cache error
 must name that block's exact acknowledged momentum. Network/timeouts, malformed

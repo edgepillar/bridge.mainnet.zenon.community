@@ -11,6 +11,7 @@ import puppeteer, { type Browser, type Page } from 'puppeteer-core'
 import { assertLab } from './lib/lab.ts'
 import { socketFailureClass } from './lib/socket-evidence.ts'
 import { summarizeNetLog, summarizeNativeLog } from './lib/transport-diagnostics.ts'
+import { browserProcessEvidence } from './lib/browser-process-evidence.ts'
 
 const outDir='e2e/.state/browser-build', origin='http://127.0.0.1:5195'
 const netLogFile='e2e/.state/compiled-netlog.private.json'
@@ -18,6 +19,8 @@ let server: PreviewServer, browser: Browser, page: Page
 const errors:string[]=[], outbound:string[]=[], scripts=new Set<string>(), violations:string[]=[]
 let initialScripts:string[]=[]
 let noticeEvidence={verified:false,packages:0,files:0,manifestSha256:''}
+let processEvidence: Awaited<ReturnType<typeof browserProcessEvidence>>, browserRevision: string | null = null
+const pendingProcessEvidence: Promise<void>[] = []
 // Keep bounded transport facts, never handshake headers or raw RPC frames.
 const socketEvidence:{allowed:boolean;status:number|null;error:boolean;closed:boolean;frontier:{chainId:number;height:number}|null;
   createdMs:number;handshakeMs:number|null;errorMs:number|null;closedMs:number|null;frontierMs:number|null;failureClass:string|null;frontierRequests:number}[]=[]
@@ -35,6 +38,10 @@ beforeAll(async()=>{
   browser=await puppeteer.launch({executablePath:process.env.CHROME_PATH,headless:true,args:['--log-net-log='+path.resolve(netLogFile)]})
   if(process.env.EXPECTED_BROWSER_VERSION)expect((await browser.version()).endsWith(process.env.EXPECTED_BROWSER_VERSION)).toBe(true)
   page=await browser.newPage()
+  const browserSession=await browser.target().createCDPSession()
+  const version=await browserSession.send('Browser.getVersion')
+  browserRevision=/^@[0-9a-f]{40}$/.test(version.revision)?version.revision:null
+  processEvidence=await browserProcessEvidence(()=>browserSession.send('SystemInfo.getProcessInfo'))
   page.on('pageerror',(error)=>errors.push(String(error)))
   page.on('console',(message)=>{if(message.type()==='error')errors.push(message.text())})
   // The fixture controls only the selected loopback socket. Production assets
@@ -71,6 +78,7 @@ beforeAll(async()=>{
   })
   session.on('Network.webSocketFrameError',({requestId,errorMessage})=>{
     const socket=sockets.get(requestId);if(socket){socket.evidence.error=true;socket.evidence.errorMs=elapsed();socket.evidence.failureClass=socketFailureClass(errorMessage)}
+    if(socket?.evidence.allowed){const diagnostic=processEvidence.captureFailure();if(pendingProcessEvidence.length<8)pendingProcessEvidence.push(diagnostic)}
   })
   session.on('Network.webSocketFrameSent',({requestId,response})=>{
     const socket=sockets.get(requestId);if(!socket||response.payloadData.length>64*1024)return
@@ -113,6 +121,8 @@ beforeAll(async()=>{
 afterAll(async()=>{
   const browserVersion=await browser?.version(),socketSnapshot=JSON.parse(JSON.stringify(socketEvidence))
   const errorSnapshot=[...errors],outboundSnapshot=[...outbound],violationSnapshot=[...violations],loadedScriptNames=[...scripts].sort()
+  await Promise.all(pendingProcessEvidence)
+  const browserProcessDiagnostics=processEvidence?.report()??{status:'UNAVAILABLE'}
   await browser?.close()
   let transportEvidence:ReturnType<typeof summarizeNetLog>|{status:'UNAVAILABLE'}={status:'UNAVAILABLE'}
   const nativeDiagnostics:Record<string,unknown>={}
@@ -130,7 +140,7 @@ afterAll(async()=>{
   }
   const report={mode:'isolated read-only production bundle',network:'devnet',sourceCommit:execFileSync('git',['rev-parse','HEAD']).toString().trim(),
     sourceTree:execFileSync('git',['rev-parse','HEAD^{tree}']).toString().trim(),lockfileHash:sha(fs.readFileSync('package-lock.json')),
-    sourceDirty:execFileSync('git',['status','--porcelain']).toString().trim().length>0,browserVersion,errors:errorSnapshot,outbound:outboundSnapshot,violations:violationSnapshot,
+    sourceDirty:execFileSync('git',['status','--porcelain']).toString().trim().length>0,browserVersion,browserRevision,browserProcessDiagnostics,errors:errorSnapshot,outbound:outboundSnapshot,violations:violationSnapshot,
     initialScripts:initialScripts.map((name)=>{const bytes=fs.readFileSync(path.join(outDir,name));return {name,bytes:bytes.length,gzipBytes:gzipSync(bytes).length,sha256:sha(bytes)}}),loadedScriptNames,noticeEvidence,socketEvidence:socketSnapshot,transportEvidence,nativeDiagnostics}
   fs.mkdirSync('.browser-results',{recursive:true});fs.writeFileSync('.browser-results/built-report.json',JSON.stringify(report,null,2)+'\n')
   await new Promise<void>((resolve)=>server?.httpServer.close(()=>resolve())??resolve())

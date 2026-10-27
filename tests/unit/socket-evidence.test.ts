@@ -18,3 +18,8 @@ it('keeps endpoints, peer messages and unknown error text out of retained eviden
   expect(classified).toBe('CONNECTION_RESET')
   expect(classified).not.toContain('PRIVATE')
 })
+
+it('separates an empty browser error from a calibrated reserved-bit protocol error', () => {
+  expect(socketFailureClass('')).toBe('EMPTY_ERROR')
+  expect(socketFailureClass('One or more reserved bits are on: reserved1 = 1, reserved2 = 0, reserved3 = 0')).toBe('INVALID_FRAME')
+})

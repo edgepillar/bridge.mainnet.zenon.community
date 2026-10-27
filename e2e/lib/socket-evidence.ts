@@ -1,8 +1,9 @@
 // Retain only known protocol categories; browser errors can contain endpoints
 // or peer-supplied data and must not be copied into published diagnostics.
 export function socketFailureClass(message: string): string {
+  if (message === '') return 'EMPTY_ERROR'
   if (/must not mask|masked frame/i.test(message)) return 'MASKED_SERVER_FRAME'
-  if (/invalid frame header|invalid reserved bits|invalid opcode|protocol error/i.test(message)) return 'INVALID_FRAME'
+  if (/invalid frame header|invalid reserved bits|one or more reserved bits are on|invalid opcode|protocol error/i.test(message)) return 'INVALID_FRAME'
   if (/invalid utf-?8/i.test(message)) return 'INVALID_UTF8'
   if (/unexpected continuation/i.test(message)) return 'UNEXPECTED_CONTINUATION'
   if (/previous message.*unfinished|new message.*unfinished/i.test(message)) return 'UNFINISHED_MESSAGE'
