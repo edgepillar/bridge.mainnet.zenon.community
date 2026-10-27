@@ -51,22 +51,37 @@ export function summarizeSyncLog(text){
   }
   return {counts,events,truncated}
 }
-export function summarizeGoroutines(text){
+export function summarizeGoroutines(text,sourceCommit=null){
   if(Buffer.byteLength(text)>2*1024*1024)throw new Error('Native profile bound exceeded')
   const groups=new Map();let observed=0,truncated=false
   for(const block of text.split(/\n\n/)){
     const header=block.match(/^goroutine \d+(?: [^\n[\]]{1,160})? \[([^\]\n]{1,160})\]:/);if(!header)continue
     if(++observed>2048){truncated=true;break}
     const state=/semacquire|Mutex\.(?:R?Lock)/.test(header[1])?'LOCK_WAIT':/chan send/.test(header[1])?'CHANNEL_SEND':/chan receive/.test(header[1])?'CHANNEL_RECEIVE':/IO wait/.test(header[1])?'IO_WAIT':/^select/.test(header[1])?'SELECT':/^running/.test(header[1])?'RUNNING':/^runnable/.test(header[1])?'RUNNABLE':/^sleep/.test(header[1])?'SLEEP':'OTHER'
-    const frames=[]
-    for(const line of block.split('\n').slice(1)){
+    const frames=[];let waitSite
+    const lines=block.split('\n').slice(1)
+    for(const [index,line] of lines.entries()){
       const at=line.lastIndexOf('(');if(at<0)continue;const frame=line.slice(0,at)
       if(frame.length<=180&&/^(?:github\.com\/zenon-network\/go-zenon\/[A-Za-z0-9_./-]+\.(?:\(\*?[A-Za-z0-9_]+\)\.)?[A-Za-z0-9_.$]+|(?:runtime|sync|internal\/sync)\.(?:\(\*?[A-Za-z0-9_]+\)\.)?[A-Za-z0-9_.$]+)$/.test(frame)){
         if(frames.length<24)frames.push(frame);else truncated=true
+        // Only this exact source has the reviewed line-to-branch mapping.
+        // Paths and offsets remain private; publish a fixed semantic category.
+        if(sourceCommit==='616f0a61ebc8562846965822f94976e531e0937c'){
+          const location=lines[index+1]?.match(/^\s+[^\r\n]*\/protocol\/downloader\/downloader\.go:(\d+)(?:\s|$)/)
+          const sourceLine=location?Number(location[1]):null
+          if(frame==='github.com/zenon-network/go-zenon/protocol/downloader.(*Downloader).fetchHashes'){
+            if(sourceLine===548)waitSite='HASH_COMPLETION_HANDOFF'
+            else if(sourceLine===532)waitSite='HASH_REPLY_OR_TIMEOUT'
+          }else if(frame==='github.com/zenon-network/go-zenon/protocol/downloader.(*Downloader).syncWithPeer'){
+            if(sourceLine===336)waitSite='SYNC_JOIN_AFTER_FIRST_SUCCESS'
+            else if(sourceLine===330)waitSite='SYNC_JOIN_FIRST_WORKER'
+          }
+        }
       }
     }
     if(!frames.some(x=>x.startsWith('github.com/zenon-network/go-zenon/')))continue
-    const key=JSON.stringify({state,frames});if(!groups.has(key)){if(groups.size>=64){truncated=true;continue}groups.set(key,{state,frames,count:0})}groups.get(key).count++
+    const site=waitSite?{waitSite}:{}
+    const key=JSON.stringify({state,frames,...site});if(!groups.has(key)){if(groups.size>=64){truncated=true;continue}groups.set(key,{state,frames,...site,count:0})}groups.get(key).count++
   }
   return {status:observed?'CAPTURED':'UNAVAILABLE',observed,groups:[...groups.values()],truncated}
 }
@@ -77,7 +92,8 @@ export async function collectNativeFailureFacts({runtime,build,head,tree,nodeRol
   const nodeOwner=roles.includes(nodeRole)&&(nodeRole==='rpc'||Array.isArray(declared)&&declared.length===5&&new Set(declared).size===5&&roles.every(role=>declared.includes(role)))
   if(!sha.test(head??'')||!sha.test(tree??'')||!digest.test(b.key??'')||!digest.test(b.binaryHash??'')||!sha.test(b.sourceCommit??'')||!sha.test(b.sourceTree??'')||r.bridgeSourceCommit!==head||r.bridgeSourceTree!==tree||r.buildKey!==b.key||r.znndHash!==b.binaryHash||r.sourceCommit!==b.sourceCommit||r.sourceTree!==b.sourceTree||!profileOwner||!nodeOwner||!['error','info'].includes(d.rpcLogLevel))return {status:'OWNER_SCOPE_UNAVAILABLE'}
   let profile={status:'UNAVAILABLE'},logs={status:'UNAVAILABLE'}
-  try{profile=summarizeGoroutines(await readProfile())}catch{/* Unavailable is not evidence of a healthy importer. */}
+  const mappedSource=b.downloaderSourceHash==='2f5b1adf15958ba170d288831225b9a4156d57c9348676b321fbb755f2aaaa68'?b.sourceCommit:null
+  try{profile=summarizeGoroutines(await readProfile(),mappedSource)}catch{/* Unavailable is not evidence of a healthy importer. */}
   try{logs=await readLogs()}catch{/* No raw filesystem or peer error is retained. */}
   return {status:profile.status==='CAPTURED'?'CAPTURED':'PARTIAL',nodeRole,profileMode:mode,captureMode:nodeRole==='rpc'?mode:'postmortem',rpcLogLevel:d.rpcLogLevel,coldCase:['error-a','error-b','info'].includes(d.coldCase)?d.coldCase:'manual',profile,logs}
 }

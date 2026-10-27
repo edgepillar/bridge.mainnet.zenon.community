@@ -23,6 +23,33 @@ it('groups project goroutines without IDs, pointers, file paths or arguments',()
   expect(result).toMatchObject({status:'CAPTURED',observed:2,groups:[{state:'LOCK_WAIT',count:2,frames:['sync.(*Mutex).Lock','github.com/zenon-network/go-zenon/protocol/downloader.(*Downloader).process']}]})
   expect(JSON.stringify(result)).not.toMatch(/PRIVATE|987654|0x|Users|source.go/)
 })
+it('distinguishes the pinned hash-completion handoff from the active hash-reply select',()=>{
+ const hashWait=(line:number)=>`goroutine 987654321 [select]:\ngithub.com/zenon-network/go-zenon/protocol/downloader.(*Downloader).fetchHashes(PRIVATE_ARGUMENT)\n\t/PRIVATE_SOURCE/protocol/downloader/downloader.go:${line} +0x123\n\n`
+ const commit='616f0a61ebc8562846965822f94976e531e0937c'
+ const result=summarizeGoroutines(hashWait(548)+hashWait(532),commit)
+ expect(result.groups.map((g:any)=>g.waitSite)).toEqual(['HASH_COMPLETION_HANDOFF','HASH_REPLY_OR_TIMEOUT'])
+ expect(JSON.stringify(result)).not.toMatch(/PRIVATE|987654|0x123|downloader\.go|548|532/)
+ expect(summarizeGoroutines(hashWait(548)).groups[0]).not.toHaveProperty('waitSite')
+ expect(summarizeGoroutines(hashWait(548),'7'.repeat(40)).groups[0]).not.toHaveProperty('waitSite')
+ expect(summarizeGoroutines(hashWait(549),commit).groups[0]).not.toHaveProperty('waitSite')
+})
+it('keeps the two real sync-worker joins distinct without publishing source paths',()=>{
+ const join=(line:number)=>`goroutine 987654321 [chan receive]:\ngithub.com/zenon-network/go-zenon/protocol/downloader.(*Downloader).syncWithPeer(PRIVATE_ARGUMENT)\n\t/PRIVATE_SOURCE/protocol/downloader/downloader.go:${line} +0x123\n\n`
+ const result=summarizeGoroutines(join(330)+join(336),'616f0a61ebc8562846965822f94976e531e0937c')
+ expect(result.groups.map((g:any)=>g.waitSite)).toEqual(['SYNC_JOIN_FIRST_WORKER','SYNC_JOIN_AFTER_FIRST_SUCCESS'])
+ expect(JSON.stringify(result)).not.toMatch(/PRIVATE|987654|0x123|downloader\.go|330|336/)
+})
+it('requires the exact built downloader file hash before inferring a source wait site',async()=>{
+ const original=owner(),commit='616f0a61ebc8562846965822f94976e531e0937c'
+ const stack='goroutine 987654321 [select]:\ngithub.com/zenon-network/go-zenon/protocol/downloader.(*Downloader).fetchHashes(PRIVATE_ARGUMENT)\n\t/PRIVATE_SOURCE/protocol/downloader/downloader.go:548 +0x123\n\n'
+ for(const fileHash of [undefined,'7'.repeat(64),'2f5b1adf15958ba170d288831225b9a4156d57c9348676b321fbb755f2aaaa68']){
+  const build={...original.build,sourceCommit:commit,downloaderSourceHash:fileHash}
+  const runtime={...original.runtime,sourceCommit:commit}
+  const result=await collectNativeFailureFacts({...original,build,runtime,readProfile:async()=>stack,readLogs:async()=>({})})
+  expect(result.profile.groups[0].waitSite).toBe(fileHash?.startsWith('2f5b')?'HASH_COMPLETION_HANDOFF':undefined)
+  expect(JSON.stringify(result)).not.toMatch(/PRIVATE|987654|0x123|downloader\.go/)
+ }
+})
 it('bounds incomplete or oversized diagnostic inputs instead of claiming full evidence',()=>{
   expect(()=>summarizeGoroutines('x'.repeat(2*1024*1024+1))).toThrow()
   expect(()=>summarizeSyncLog('x'.repeat(256*1024+1))).toThrow()

@@ -23,7 +23,8 @@ fs.rmSync(source, { recursive: true, force: true }); fs.mkdirSync(source, { recu
 run('tar', ['-x', '-C', source], { input: archive })
 fs.copyFileSync(path.join(here, 'znnd/devnet_bridge.go'), path.join(source, 'vm/constants/devnet_bridge.go'))
 const mode = process.argv[2] ?? 'native'
-const manifest = { sourceCommit: commit, sourceTree: tree, archiveHash: digest(archive), overlayHashes, key, mode, pins }
+const manifest = { sourceCommit: commit, sourceTree: tree, archiveHash: digest(archive),
+  downloaderSourceHash: digest(fs.readFileSync(path.join(source, 'protocol/downloader/downloader.go'))), overlayHashes, key, mode, pins }
 if (mode === 'native') {
   const go = process.env.LAB_GO_BIN || 'go'
   const version = run(go, ['version']).toString().trim()

@@ -88,6 +88,12 @@ transport reports exclude raw NetLog, headers, cookies and RPC payloads. A
 passing reconnect control does not establish the cause of an earlier unexpected
 transport failure.
 
+The suite establishes the idempotent committed loopback bridge fixture itself
+before starting its read-only browser checks. It can therefore run first or
+after either other E2E file. Vitest orders uncached files by size and cached
+files by failure/duration; no filename or previous suite may supply this setup
+implicitly. Fixture writes retain the chain-322/Anvil-31337 identity guard.
+
 The compiled-browser report also records the browser revision and a bounded
 network-service inventory before navigation. Only a WebSocket error triggers
 another inventory; there is no idle polling. Reports retain service counts and
@@ -110,6 +116,13 @@ identifiers and paths are never included. Missing or incomplete capture stays
 explicit; a zero counter does not prove the service never exited. The message
 itself does not distinguish a crash from termination or establish its cause.
 Reporting snapshots precede the fixture's intentional browser shutdown.
+
+Native stack reports can distinguish fixed downloader wait sites only for the
+exact reviewed Go commit and built downloader file SHA-256. The EOF handoff and the hash reply/timeout select are
+separate categories, as are the first-worker and remaining-worker joins.
+Unknown source pins or source locations have no inferred wait-site category.
+Only those fixed categories are emitted; raw paths, offsets and arguments stay
+private. A matching stack shape alone is not a causal reproduction.
 
 A known pre-publication validation rejection archives the matching signed fixture
 under `e2e/.state/rejected/` and releases its pending slot. The startup cache error

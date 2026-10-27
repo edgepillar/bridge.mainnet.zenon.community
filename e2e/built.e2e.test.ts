@@ -1,4 +1,4 @@
-// Read-only smoke qualification of compiled assets and the actual HTML CSP.
+// Prepare the isolated fixture, then qualify compiled assets and the HTML CSP read-only.
 // No wallet is injected and the only RPC endpoints are the isolated lab.
 import fs from 'node:fs'
 import path from 'node:path'
@@ -9,7 +9,7 @@ import type { Readable } from 'node:stream'
 import { afterAll, beforeAll, expect, it } from 'vitest'
 import { build, preview, type PreviewServer } from 'vite'
 import puppeteer, { type Browser, type Page } from 'puppeteer-core'
-import { assertLab } from './lib/lab.ts'
+import { setup } from './setup.ts'
 import { socketFailureClass } from './lib/socket-evidence.ts'
 import { summarizeNetLog, summarizeNativeLog } from './lib/transport-diagnostics.ts'
 import { browserProcessEvidence } from './lib/browser-process-evidence.ts'
@@ -32,7 +32,9 @@ const socketEvidence:{allowed:boolean;status:number|null;error:boolean;closed:bo
   createdMs:number;handshakeMs:number|null;errorMs:number|null;closedMs:number|null;frontierMs:number|null;failureClass:string|null;frontierRequests:number}[]=[]
 const sha=(data:Buffer)=>crypto.createHash('sha256').update(data).digest('hex')
 beforeAll(async()=>{
-  await assertLab()
+  // Vitest may run this file first by size or a cached failure. Establish the
+  // committed loopback fixture here instead of relying on another test file.
+  await setup()
   if(!process.env.CHROME_PATH)throw new Error('Set CHROME_PATH to the pinned browser')
   process.env.VITE_NETWORK='devnet'
   // Vitest sets NODE_ENV=test; that would otherwise retain development stores.
