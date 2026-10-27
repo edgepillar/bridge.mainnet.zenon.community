@@ -2,7 +2,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import {execFileSync} from 'node:child_process'
+import {spawnSync} from 'node:child_process'
 import {fileURLToPath} from 'node:url'
 
 const reader=fileURLToPath(new URL('./browser-crash-key.py',import.meta.url))
@@ -13,17 +13,23 @@ export function offlineCrashOptions(puppeteer,directory){
  return {ignoreDefaultArgs:['--disable-crash-reporter'],args:['--enable-crash-reporter','--crash-dumps-dir='+directory],env:{...process.env,CHROME_HEADLESS:'1'}}
 }
 export function offlineReporterIdentity(browserPath){
- const file=path.join(path.dirname(browserPath),'chrome_crashpad_handler'),st=fs.lstatSync(file)
+ const pin=JSON.parse(fs.readFileSync(new URL('../lab/browser-reporter.pin.json',import.meta.url)))
+ const file=path.join(path.dirname(browserPath),'chrome_crashpad_handler');let st
+ try{st=fs.lstatSync(file)}catch{throw Error('PINNED_OFFLINE_REPORTER_MISSING')}
  if(!st.isFile()||st.isSymbolicLink()||st.size<=0||st.size>16*1024**2)throw Error('Pinned reporter executable refused')
- return {sha256:crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'),bytes:st.size}
+ const sha256=crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')
+ if(st.size!==pin.bytes||sha256!==pin.sha256)throw Error('PINNED_OFFLINE_REPORTER_IDENTITY_REFUSED')
+ return {sha256,bytes:st.size}
 }
 export function readOfflineCrashEvidence(directory){
+ const child=spawnSync('python3',['-B',reader,directory],{timeout:5000,maxBuffer:64*1024,stdio:['ignore','pipe','pipe']})
+ const readerProcess={state:typeof child.status==='number'?'EXITED':child.signal?'SIGNALED':'UNKNOWN',actualExit:child.status,signal:child.signal,outputComplete:!child.error&&child.status!==null}
  try{
-  const raw=execFileSync('python3',['-B',reader,directory],{timeout:5000,maxBuffer:64*1024,stdio:['ignore','pipe','ignore']})
-  const result=JSON.parse(raw)
+  if(child.status!==0||!readerProcess.outputComplete)throw Error('Reader process refused')
+  const result=JSON.parse(child.stdout)
   if(result.status!=='COMPLETE'||!Array.isArray(result.reports)||result.reports.length>8||result.rawDumpPublished!==false||result.otherAnnotationValuesRead!==false)throw Error('Reader output refused')
-  return result
- }catch{return {status:'UNAVAILABLE',reason:'OWNED_ANNOTATION_READ_REFUSED',rawDumpPublished:false}}
+  return {...result,readerProcess}
+ }catch{return {status:'UNAVAILABLE',reason:'OWNED_ANNOTATION_READ_REFUSED',rawDumpPublished:false,readerProcess}}
 }
 
 export async function calibrateOfflineCrashReader(puppeteer,executablePath,work){

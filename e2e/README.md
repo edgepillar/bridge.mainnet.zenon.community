@@ -269,6 +269,22 @@ That injected renderer crash is reported separately from natural failures.
 The production bundle still fails on its first socket error or network-service
 replacement; failed starts are never retried.
 
+The pinned Linux headless-shell package omits `chrome_crashpad_handler`. The
+`info` job installs only that member from the official full Chrome package at the
+same version, using a pinned 924,320-byte HTTP range, archive identity, compressed
+and uncompressed SHA-256 values, exact sizes and ELF architecture. It refuses a
+full-archive response or an unknown existing helper. The pinned headless browser
+must retain its exact executable digest. Neither a second browser nor a raw dump
+is published. The manifest records the actual component input and reuse status.
+
+A failed E2E suite remains fatal while subsequent read-only diagnostic probes
+may still run against the same owned lab and an already validated bundle. Each
+stage's actual wrapper exit is retained. An 18-minute E2E process-group bound
+leaves time for evidence upload within the job's existing 35-minute deadline;
+timeout exits leave the child's final outcome unknown. Test, readiness and socket
+assertions are unchanged. The reader separately records its real process exit,
+signal and output completeness; a complete empty report cannot establish a cause.
+
 The reader follows only bounded Crashpad annotation structures. It skips report
 and client identifiers, memory, stacks, environment, paths and unrelated annotation
 values. It emits allowlisted Mojo validation/interface/method categories and a

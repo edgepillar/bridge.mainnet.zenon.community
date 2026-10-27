@@ -29,7 +29,7 @@ if(fs.existsSync(reportFile))throw Error('Reconcile the existing report before a
 fs.mkdirSync(path.dirname(reportFile),{recursive:true})
 const sha=b=>crypto.createHash('sha256').update(b).digest('hex')
 const lockBytes=fs.readFileSync(path.join(repo,'package-lock.json')),lock=JSON.parse(lockBytes)
-const sourceFiles=Object.fromEntries(['e2e/browser-transport-probe.mjs','e2e/lib/probe-ledger-round.mjs','e2e/lib/probe-package-lock.mjs','e2e/lib/browser-termination-evidence.ts','e2e/lib/browser-memory-evidence.ts','e2e/lib/browser-stderr-evidence.ts','e2e/lib/socket-evidence.ts','e2e/lib/browser-signal-evidence.ts','e2e/lib/browser-signal-watch.py','e2e/lib/compiled-startup-evidence.mjs','e2e/lib/browser-crash-evidence.mjs','e2e/lib/browser-crash-key.py'].map(n=>[n,sha(fs.readFileSync(path.join(repo,n)))]))
+const sourceFiles=Object.fromEntries(['e2e/browser-transport-probe.mjs','e2e/lib/probe-ledger-round.mjs','e2e/lib/probe-package-lock.mjs','e2e/lib/browser-termination-evidence.ts','e2e/lib/browser-memory-evidence.ts','e2e/lib/browser-stderr-evidence.ts','e2e/lib/socket-evidence.ts','e2e/lib/browser-signal-evidence.ts','e2e/lib/browser-signal-watch.py','e2e/lib/compiled-startup-evidence.mjs','e2e/lib/browser-crash-evidence.mjs','e2e/lib/browser-crash-key.py','e2e/lib/reporter-component.mjs','e2e/lab/browser-reporter.pin.json','e2e/lab/install-browser-reporter.mjs'].map(n=>[n,sha(fs.readFileSync(path.join(repo,n)))]))
 const memoryModule=await import(pathToFileURL(path.join(repo,'e2e/lib/browser-memory-evidence.ts')).href)
 const stderrModule=await import(pathToFileURL(path.join(repo,'e2e/lib/browser-stderr-evidence.ts')).href)
 const binaryHash=()=>{const file=process.env.CHROME_PATH,st=fs.lstatSync(file);if(!st.isFile()||st.isSymbolicLink()||st.size>1024**3)throw Error('Browser executable refused');const h=crypto.createHash('sha256'),fd=fs.openSync(file,'r'),buffer=Buffer.alloc(128*1024);try{for(;;){const n=fs.readSync(fd,buffer,0,buffer.length,null);if(!n)break;h.update(buffer.subarray(0,n))}}finally{fs.closeSync(fd)}return h.digest('hex')}
@@ -182,8 +182,9 @@ try{
   fs.rmSync(profile,{recursive:true})
  }
  if(result.status==='RUNNING')result.status='PASS_NO_NATURAL_FAILURE_REPRODUCED'
-}catch{
+}catch(error){
  result.status='CONTROL_FAILURE';result.failureCode='OWNED_EXPERIMENT_INCOMPLETE'
+ if(['PINNED_OFFLINE_REPORTER_MISSING','PINNED_OFFLINE_REPORTER_IDENTITY_REFUSED'].includes(error?.message))result.failureCode=error.message
  if(currentTrial&&!result.trials.includes(currentTrial)){
   await currentSignal?.stop();currentTrial.signalObservation=currentSignal?.report()??{status:'UNAVAILABLE'};currentSignal=undefined
   currentMemory?.captureAfterFailure();currentTrial.memory=currentMemory?.report()??{status:'UNAVAILABLE'}

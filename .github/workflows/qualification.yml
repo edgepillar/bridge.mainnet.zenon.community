@@ -128,8 +128,12 @@ jobs:
           test -z "$(docker ps -aq --filter label=com.docker.compose.project=bridge-lab)"
           touch .lab-tools/docker-launch-owned
           npm run lab:up
-          npm run test:e2e
-          BROWSER_PROBE_MODE=docker node --experimental-strip-types e2e/browser-transport-probe.mjs
+          e2e_exit=0
+          timeout --signal=TERM --kill-after=30s 18m npm run test:e2e || e2e_exit=$?
+          rpc_exit=0
+          BROWSER_PROBE_MODE=docker node --experimental-strip-types e2e/browser-transport-probe.mjs || rpc_exit=$?
+          printf '{"schema":1,"mode":"docker","e2eWrapperExit":%s,"rpcProbeExit":%s,"compiledProbeExit":null,"timeoutExitMeansChildOutcomeUnknown":true}\n' "$e2e_exit" "$rpc_exit" > .browser-results/qualification-stage-outcomes.json
+          test "$e2e_exit" -eq 0 && test "$rpc_exit" -eq 0
       - name: Stop this job's Docker lab
         if: always()
         run: |
@@ -144,6 +148,7 @@ jobs:
             .browser-results/built-report.json
             .browser-results/lab-transport-probe-report.json
             .browser-results/kernel-signal-control.json
+            .browser-results/qualification-stage-outcomes.json
             e2e/lab/.build/manifest.json
             e2e/lab/.build/docker/run-manifest.json
             e2e/lab/.build/docker/readiness-report.json
@@ -195,6 +200,9 @@ jobs:
           browser_path=$(find .lab-tools -type f -name chrome-headless-shell -print -quit)
           test -n "$browser_path"
           printf 'CHROME_PATH=%s/%s\n' "$GITHUB_WORKSPACE" "$browser_path" >> "$GITHUB_ENV"
+      - name: Install the exact offline reporter component
+        if: matrix.sync_case == 'info'
+        run: node e2e/lab/install-browser-reporter.mjs
       - name: Configure namespaces for the pinned browser sandbox
         run: |
           test -x "$CHROME_PATH"
@@ -225,11 +233,17 @@ jobs:
           trap 'kill "$lab_supervisor" 2>/dev/null || true; wait "$lab_supervisor" || true' EXIT
           node e2e/lab/frontier.mjs 60 --wait 120 --native
           npm run test:browser
-          npm run test:e2e
-          BROWSER_PROBE_MODE=native node --experimental-strip-types e2e/browser-transport-probe.mjs
+          e2e_exit=0
+          timeout --signal=TERM --kill-after=30s 18m npm run test:e2e || e2e_exit=$?
+          rpc_exit=0
+          BROWSER_PROBE_MODE=native node --experimental-strip-types e2e/browser-transport-probe.mjs || rpc_exit=$?
+          compiled_exit=null
           if test "$LAB_COLD_CASE" = info; then
-            BROWSER_PROBE_MODE=native BROWSER_PROBE_CLIENT=compiled node --experimental-strip-types e2e/browser-transport-probe.mjs
+            compiled_exit=0
+            BROWSER_PROBE_MODE=native BROWSER_PROBE_CLIENT=compiled node --experimental-strip-types e2e/browser-transport-probe.mjs || compiled_exit=$?
           fi
+          printf '{"schema":1,"mode":"native","e2eWrapperExit":%s,"rpcProbeExit":%s,"compiledProbeExit":%s,"timeoutExitMeansChildOutcomeUnknown":true}\n' "$e2e_exit" "$rpc_exit" "$compiled_exit" > .browser-results/qualification-stage-outcomes.json
+          test "$e2e_exit" -eq 0 && test "$rpc_exit" -eq 0 && { test "$compiled_exit" = null || test "$compiled_exit" -eq 0; }
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -240,6 +254,8 @@ jobs:
             .browser-results/lab-transport-probe-report.json
             .browser-results/lab-compiled-startup-report.json
             .browser-results/kernel-signal-control.json
+            .browser-results/qualification-stage-outcomes.json
+            .lab-tools/browser-reporter-manifest.json
             .browser-results/*.png
             e2e/lab/.build/manifest.json
             e2e/lab/.build/downloader-control-report.json
