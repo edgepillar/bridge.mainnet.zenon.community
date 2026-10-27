@@ -62,37 +62,81 @@ const recent: number[] = []
 function attach(c: ZenonClient, knownChainId = 0) {
   node.epoch++
   stopMomentums?.()
-  client?.close()
+  const previous = client
   client = c
+  previous?.close()
   api.value = new ZenonApi(c)
+  const selectedApi = api.value
   node.url = c.url
-  c.onState = (s) => { if (client === c) node.conn = s }
   node.conn = c.state
   recent.length = 0
   // Another node may be on another chain, with a lower height.
   node.height = 0
   node.timestamp = 0
   node.chainId = knownChainId
-  if (!knownChainId) {
-    void c
-      .frontierMomentum()
-      .then((m) => client === c && (node.chainId = m.chainIdentifier))
-      .catch(() => undefined)
+  let transport = 0
+  let refreshing: number | null = null
+  let validated = !!knownChainId && c.state === 'open'
+  let establishedChain = knownChainId
+  if (!validated) node.chainId = 0
+  const current = (generation: number) => client === c && transport === generation && validated
+  const refresh = async () => {
+    const generation = transport
+    if (refreshing === generation) return
+    refreshing = generation
+    try {
+      const m = await c.frontierMomentum()
+      if (client !== c || generation !== transport) return
+      if (node.source === 'wallet' && establishedChain && m.chainIdentifier !== establishedChain) {
+        writePref(null)
+        useDefault(`Syrius node changed chain. Reading from ${hostOf(config.defaultNode)}.`)
+        return
+      }
+      node.chainId = m.chainIdentifier
+      establishedChain = m.chainIdentifier
+      validated = true
+      onMomentum(m, c, selectedApi, () => current(generation))
+      void seedMomentums(c, selectedApi, () => current(generation))
+    } catch { /* A new socket alone cannot restore chain or signing authority. */ }
+    finally { if (refreshing === generation) refreshing = null }
   }
-  const selectedApi = api.value
-  void seedMomentums(c, selectedApi)
-  stopMomentums = c.onMomentum((m) => onMomentum(m, c, selectedApi))
+  c.onState = (s) => {
+    if (client !== c) return
+    node.conn = s
+    if (s === 'closed') {
+      // The client object survives reconnects; every asynchronous read must
+      // still belong to the socket whose chain identity was established.
+      transport++
+      validated = false
+      node.epoch++
+      node.chainId = node.height = node.timestamp = 0
+      recent.length = 0
+      node.rate = 10
+    } else if (s === 'open') void refresh()
+  }
+  stopMomentums = c.onMomentum((m) => {
+    if (client !== c) return
+    if (!validated) {
+      if (node.conn === 'open') void refresh()
+      return
+    }
+    const generation = transport
+    onMomentum(m, c, selectedApi, () => current(generation))
+  })
+  if (validated) void seedMomentums(c, selectedApi, () => current(0))
+  else if (c.state === 'open') void refresh()
 }
 
-function onMomentum(m: Momentum, owner: ZenonClient, selectedApi: ZenonApi) {
-  if (client !== owner) return
+function onMomentum(m: Momentum, owner: ZenonClient, selectedApi: ZenonApi, current: () => boolean) {
+  if (client !== owner || !current()) return
+  if (m.chainIdentifier && m.chainIdentifier !== node.chainId) return
   if (m.height <= node.height) return
   // A subscription event carries only hash and height (go-zenon
   // rpc/api/subscribe/api.go), so the timestamp is read once per momentum.
   if (!m.timestamp) {
     void selectedApi
       .momentumAt(m.height)
-      .then((full) => full && onMomentum(full, owner, selectedApi))
+      .then((full) => full && onMomentum(full, owner, selectedApi, current))
       .catch(() => undefined)
     return
   }
@@ -104,17 +148,17 @@ function onMomentum(m: Momentum, owner: ZenonClient, selectedApi: ZenonApi) {
   node.tick++
 }
 
-async function seedMomentums(owner: ZenonClient, selectedApi: ZenonApi) {
+async function seedMomentums(owner: ZenonClient, selectedApi: ZenonApi, current: () => boolean) {
   try {
     const list = await selectedApi.momentums(30)
-    if (client !== owner || !list.length) return
+    if (client !== owner || !current() || !list.length || list.some((m) => m.chainIdentifier && m.chainIdentifier !== node.chainId)) return
     const top = list.reduce((a, b) => (b.height > a.height ? b : a), list[0])
     // A subscription may already be ahead of this asynchronous seed. Never
     // replace its samples, and let onMomentum append the top sample only once.
     if (top.height <= node.height) return
     const ts = list.filter((m) => m.height < top.height).map((m) => m.timestamp).sort((a, b) => a - b)
     recent.splice(0, recent.length, ...ts.slice(-29))
-    onMomentum(top, owner, selectedApi)
+    onMomentum(top, owner, selectedApi, current)
   } catch {
     /* the subscription fills it in */
   }
@@ -235,7 +279,7 @@ export function confirmWalletNode() {
   const p = walletNode.pending
   if (!p || !pendingProbe) return
   // The page may already be on that very node (Syrius set to the default).
-  if (client && client.url === p.url) {
+  if (client && client.url === p.url && node.chainId === p.chainId && nodeIsCurrent()) {
     pendingProbe.close()
     node.chainId = p.chainId
   } else attach(pendingProbe, p.chainId)
@@ -284,7 +328,7 @@ async function syncWalletNode(url: string | null, request: number) {
       writePref(null)
       return useDefault(`Syrius node changed chain. ${back}`)
     }
-    if (client && client.url === pref.url) {
+    if (client && client.url === pref.url && node.chainId === chainId && nodeIsCurrent()) {
       probe.close()
       node.chainId = chainId
     } else attach(probe, chainId)

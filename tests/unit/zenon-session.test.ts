@@ -12,7 +12,7 @@ vi.mock('../../src/znn/client.ts', () => ({ ZenonClient: class {
 vi.mock('../../src/znn/api.ts', () => ({ ZenonApi: class {
   constructor(public c: any) {}
   momentums() { return Promise.resolve(f.nodes[this.c.url]?.rows ?? [1, 2, 3].map((height) => ({ height, timestamp: Date.now() / 1000 - (3 - height) * 10 }))) }
-  momentumAt(height: number) { return Promise.resolve({ height, timestamp: Date.now() / 1000 + height - 3 }) }
+  momentumAt(height: number) { return f.nodes[this.c.url]?.momentumAt?.(height) ?? Promise.resolve({ height, timestamp: Date.now() / 1000 + height - 3 }) }
 } }))
 vi.mock('../../src/wallet/syrius.ts', () => ({
   whenProviderReady: (...a: any[]) => f.wallet.ready(...a), readState: (...a: any[]) => f.wallet.read(...a), connect: (...a: any[]) => f.wallet.connect(...a),
@@ -52,6 +52,68 @@ describe('selected Zenon node and wallet session authority', () => {
     f.nodes[defaultUrl] = { frontier: () => Promise.reject(new Error('offline')), rows: [] }
     const z = await import('../../src/state/zenon.ts'); await z.startNode()
     expect(z.node.chainId).toBe(0); expect(z.nodeIsCurrent()).toBe(false); expect(f.clients[0].closed).toBe(true)
+  })
+  it('invalidates a disconnected transport and requires a fresh frontier before reopening authority', async () => {
+    const z = await connected(), owner = f.clients[0], epoch = z.node.epoch, gate = deferred<any>()
+    f.nodes[defaultUrl] = { frontier: () => gate.promise, rows: [] }
+    owner.onState('closed')
+    expect(z.node).toMatchObject({ chainId: 0, height: 0, timestamp: 0 }); expect(z.node.epoch).toBeGreaterThan(epoch)
+    owner.onState('open'); expect(z.nodeIsCurrent()).toBe(false)
+    gate.resolve({ hash, chainIdentifier: 1, height: 10, timestamp: Date.now() / 1000 })
+    await vi.waitFor(() => expect(z.nodeIsCurrent()).toBe(true))
+    expect(z.node).toMatchObject({ chainId: 1, height: 10 })
+  })
+  it('discards a delayed seed from the previous socket of the same client', async () => {
+    const oldSeed = deferred<any>()
+    f.nodes[defaultUrl] = { rows: oldSeed.promise }
+    const z = await import('../../src/state/zenon.ts'); await z.startNode(); const owner = f.clients[0]
+    f.nodes[defaultUrl] = { frontier: async () => ({ hash, chainIdentifier: 1, height: 10, timestamp: Date.now() / 1000 }), rows: [] }
+    owner.onState('closed'); owner.onState('open')
+    await vi.waitFor(() => expect(z.node.height).toBe(10))
+    oldSeed.resolve([{ height: 999, timestamp: Date.now() / 1000 }]); await Promise.resolve(); await Promise.resolve()
+    expect(z.node.height).toBe(10)
+  })
+  it('rejects stale frontier completions across consecutive reconnects', async () => {
+    const z = await connected(), owner = f.clients[0], retired = deferred<any>(), current = deferred<any>()
+    f.nodes[defaultUrl] = { frontier: () => retired.promise, rows: [] }
+    owner.onState('closed'); owner.onState('open')
+    f.nodes[defaultUrl].frontier = () => current.promise
+    owner.onState('closed'); owner.onState('open')
+    retired.resolve({ hash, chainIdentifier: 322, height: 999, timestamp: Date.now() / 1000 })
+    await Promise.resolve(); await Promise.resolve(); expect(z.node.chainId).toBe(0); expect(z.nodeIsCurrent()).toBe(false)
+    current.resolve({ hash, chainIdentifier: 1, height: 10, timestamp: Date.now() / 1000 })
+    await vi.waitFor(() => expect(z.nodeIsCurrent()).toBe(true)); expect(z.node.chainId).toBe(1); expect(z.node.height).toBe(10)
+  })
+  it('drops a remembered wallet endpoint if its new transport reports another chain', async () => {
+    const z = await connected(); await z.requestWalletNode(); z.confirmWalletNode()
+    const owner = f.clients.at(-1)
+    f.nodes[walletUrl] = { frontier: async () => ({ hash, chainIdentifier: 322, height: 10, timestamp: Date.now() / 1000 }), rows: [] }
+    owner.onState('closed'); owner.onState('open')
+    await vi.waitFor(() => expect(z.node.source).toBe('default'))
+    expect(owner.closed).toBe(true); expect(localStorage.getItem('bridge.node')).toBeNull(); expect(z.node.notice).toContain('changed chain')
+    expect(z.node.chainId).not.toBe(322)
+  })
+  it('discards a retired transport subscription lookup after reconnecting', async () => {
+    const z = await connected(), owner = f.clients[0], oldLookup = deferred<any>()
+    f.nodes[defaultUrl] = { momentumAt: () => oldLookup.promise, rows: [], frontier: async () => ({ hash, chainIdentifier: 1, height: 10, timestamp: Date.now() / 1000 }) }
+    owner.handler({ height: 999, timestamp: 0, chainIdentifier: 0 })
+    owner.onState('closed'); owner.onState('open'); await vi.waitFor(() => expect(z.node.height).toBe(10))
+    oldLookup.resolve({ hash, chainIdentifier: 1, height: 999, timestamp: Date.now() / 1000 }); await Promise.resolve(); await Promise.resolve()
+    expect(z.node.height).toBe(10)
+  })
+  it('coalesces frontier recovery reads and keeps failed revalidation unavailable', async () => {
+    const z = await connected(), owner = f.clients[0], gate = deferred<any>(), frontier = vi.fn(() => gate.promise)
+    f.nodes[defaultUrl] = { frontier, rows: [] }
+    owner.onState('closed'); owner.onState('open')
+    for (let i = 0; i < 5; i++) owner.handler({ height: 10, timestamp: Date.now() / 1000, chainIdentifier: 1 })
+    expect(frontier).toHaveBeenCalledTimes(1); expect(z.nodeIsCurrent()).toBe(false)
+    gate.resolve({ hash, chainIdentifier: 1, height: 10, timestamp: Date.now() / 1000 })
+    await vi.waitFor(() => expect(z.nodeIsCurrent()).toBe(true))
+    owner.onState('closed'); f.nodes[defaultUrl].frontier = vi.fn(async () => { throw new Error('frontier unavailable') }); owner.onState('open')
+    await Promise.resolve(); await Promise.resolve(); expect(z.node.chainId).toBe(0); expect(z.nodeIsCurrent()).toBe(false)
+    f.nodes[defaultUrl].frontier = vi.fn(async () => ({ hash, chainIdentifier: 1, height: 11, timestamp: Date.now() / 1000 }))
+    owner.handler({ height: 11, timestamp: 0, chainIdentifier: 0 }); await vi.waitFor(() => expect(z.node.height).toBe(11))
+    expect(z.nodeIsCurrent()).toBe(true)
   })
   it('does not replace a newer subscription rate with a late older seed', async () => {
     const gate = deferred<any>(); f.nodes[defaultUrl] = { rows: gate.promise }

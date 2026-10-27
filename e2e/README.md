@@ -39,6 +39,15 @@ image pairing and readiness are recorded in `.build/manifest.json` and
 Docker job that starts with no chain assets or fixture publication, then runs all
 three E2E files. Its result remains separate from the native job.
 
+The compiled-browser suite requires a fresh WebSocket upgrade and validated
+chain-322 frontier for the initial load, four cold starts and a controlled
+normal socket disconnect/reconnect. Reconnection must issue a new frontier
+read; a new socket cannot inherit the old socket's chain or freshness evidence.
+Console errors, unexpected endpoints and CSP violations remain fatal. Bounded
+transport reports exclude raw NetLog, headers, cookies and RPC payloads. A
+passing reconnect control does not establish the cause of an earlier unexpected
+transport failure.
+
 A known pre-publication validation rejection archives the matching signed fixture
 under `e2e/.state/rejected/` and releases its pending slot. The startup cache error
 must name that block's exact acknowledged momentum. Network/timeouts, malformed

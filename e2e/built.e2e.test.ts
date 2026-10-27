@@ -37,6 +37,23 @@ beforeAll(async()=>{
   page=await browser.newPage()
   page.on('pageerror',(error)=>errors.push(String(error)))
   page.on('console',(message)=>{if(message.type()==='error')errors.push(message.text())})
+  // The fixture controls only the selected loopback socket. Production assets
+  // expose no test store or disconnect hook.
+  await page.evaluateOnNewDocument(()=>{
+    const NativeSocket=window.WebSocket
+    let disconnect=()=>false
+    window.WebSocket=class extends NativeSocket{
+      constructor(url:string|URL,protocols?:string|string[]){
+        super(url,protocols)
+        if(this.url==='ws://127.0.0.1:46998/')disconnect=()=>{
+          if(this.readyState!==NativeSocket.OPEN)return false
+          this.close(1000,'qualification disconnect')
+          return true
+        }
+      }
+    }
+    ;(window as any).__qualificationCloseTransport=()=>disconnect()
+  })
   // HTTP readiness cannot prove the browser's WebSocket upgrade or RPC identity.
   const session=await page.createCDPSession()
   const sockets=new Map<string,{evidence:typeof socketEvidence[number];frontiers:Set<number>}>()
@@ -167,4 +184,13 @@ it('repeats compiled startup without losing a validated browser transport',async
     expect(await page.evaluate(()=>(window as any).__bridge)).toBeUndefined()
     expect(errors).toEqual([]);expect(outbound).toEqual([]);expect(violations).toEqual([])
   }
+})
+
+it('revalidates the compiled client frontier after an isolated transport disconnect',async()=>{
+  const firstSocket=socketEvidence.length,previous=socketEvidence.at(-1)!
+  expect(await page.evaluate(()=>(window as any).__qualificationCloseTransport())).toBe(true)
+  await expect.poll(()=>previous.closed,{timeout:5_000}).toBe(true)
+  await expect.poll(()=>socketEvidence.slice(firstSocket).some((socket)=>socket.allowed&&socket.status===101&&!socket.error&&!socket.closed&&socket.frontier?.chainId===322&&socket.frontier.height>=20),{timeout:60_000}).toBe(true)
+  expect(await page.evaluate(()=>(window as any).__bridge)).toBeUndefined()
+  expect(errors).toEqual([]);expect(outbound).toEqual([]);expect(violations).toEqual([])
 })
