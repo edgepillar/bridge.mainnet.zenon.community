@@ -80,6 +80,7 @@ jobs:
     env:
       GO_ZENON_DIR: ${{ github.workspace }}/.lab-source
       EXPECTED_BROWSER_VERSION: 155.0.8059.39
+      BROWSER_SIGNAL_TRACE: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -112,6 +113,14 @@ jobs:
             '}' > .lab-tools/browser.apparmor
           sudo install -m 0644 .lab-tools/browser.apparmor /etc/apparmor.d/bridge-qualification-browser
           sudo apparmor_parser --replace /etc/apparmor.d/bridge-qualification-browser
+      - name: Calibrate the owned kernel signal observer
+        run: |
+          if ! sudo mountpoint -q /sys/kernel/tracing; then
+            sudo mount -t tracefs tracefs /sys/kernel/tracing
+          fi
+          test "$(sudo findmnt -n -o FSTYPE --target /sys/kernel/tracing)" = tracefs
+          mkdir -p .browser-results
+          sudo -n python3 -B e2e/lib/browser-signal-watch.py --self-test > .browser-results/kernel-signal-control.json
       - name: Qualify a fresh Docker lab
         run: |
           test ! -e e2e/.state/publication.json
@@ -134,6 +143,7 @@ jobs:
           path: |
             .browser-results/built-report.json
             .browser-results/lab-transport-probe-report.json
+            .browser-results/kernel-signal-control.json
             e2e/lab/.build/manifest.json
             e2e/lab/.build/docker/run-manifest.json
             e2e/lab/.build/docker/readiness-report.json
@@ -155,7 +165,7 @@ jobs:
       LAB_COLD_CASE: ${{ matrix.sync_case }}
       LAB_RPC_LOG_LEVEL: ${{ matrix.sync_case == 'info' && 'info' || 'error' }}
       LAB_RPC_PROFILE_MODE: ${{ matrix.sync_case == 'error-b' && 'postmortem' || 'loopback' }}
-      BROWSER_SIGNAL_TRACE: ${{ matrix.sync_case == 'info' && '1' || '0' }}
+      BROWSER_SIGNAL_TRACE: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -198,7 +208,6 @@ jobs:
           sudo apparmor_parser --replace /etc/apparmor.d/bridge-qualification-browser
       - run: npm run lab:build:native
       - name: Calibrate the owned kernel signal observer
-        if: matrix.sync_case == 'info'
         run: |
           if ! sudo mountpoint -q /sys/kernel/tracing; then
             sudo mount -t tracefs tracefs /sys/kernel/tracing

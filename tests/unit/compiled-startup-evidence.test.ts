@@ -1,5 +1,5 @@
 import {expect,it} from 'vitest'
-import {compiledStartupEvidence} from '../../e2e/lib/compiled-startup-evidence.mjs'
+import {compiledStartupEvidence,compiledScriptPath} from '../../e2e/lib/compiled-startup-evidence.mjs'
 const request=JSON.stringify({jsonrpc:'2.0',id:1,method:'ledger.getFrontierMomentum',params:[]})
 const response=(chain=322)=>JSON.stringify({jsonrpc:'2.0',id:1,result:{chainIdentifier:chain,height:40,hash:'0'.repeat(64)}})
 function valid(e:ReturnType<typeof compiledStartupEvidence>,id='owned'){
@@ -29,4 +29,14 @@ it('bounds socket and pending evidence and excludes identifiers or bodies',()=>{
  for(let i=0;i<9;i++)e.created('extra'+i,'ws://127.0.0.1:46998/')
  expect(e.report().socketCount).toBe(8);expect(e.report().invalid).toBeGreaterThan(1)
  expect(JSON.stringify(e.report())).not.toMatch(/synthetic-private|hash|jsonrpc|\/\//)
+})
+it('accepts the actual standalone theme initializer as a relative build path',()=>{
+ expect(compiledScriptPath('/theme-init.js')).toBe('theme-init.js')
+ expect(compiledScriptPath('/assets/request-Ab_1-.js')).toBe('assets/request-Ab_1-.js')
+})
+it('refuses traversal, another root script, encoded paths and URLs',()=>{
+ for(const name of ['/other.js','/assets/../theme-init.js','/assets/%2e%2e/a.js','https://synthetic.invalid/assets/a.js','//assets/a.js','/assets/a.js?token=synthetic','/assets/a\\b.js'])expect(()=>compiledScriptPath(name)).toThrow()
+})
+it('refuses malformed script name types and extensions',()=>{
+ for(const name of [null,{},1,'/assets/a.css','/theme-init.js/extra','theme-init.js'])expect(()=>compiledScriptPath(name)).toThrow()
 })

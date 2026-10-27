@@ -133,7 +133,7 @@ are excluded. Unexpected socket/console errors remain fatal.
 The pinned Linux implementation can send `SIGKILL` itself when querying a
 [disconnected child's known-dead status](https://github.com/chromium/chromium/blob/3ff7ac5a9224be9156d7f8703a06e22890aafd34/base/process/kill_posix.cc#L82).
 A killed-counter delta therefore does not prove an external actor or OOM.
-The `info` native CI case calibrates a separate owned kernel signal observer
+Every native and Docker CI case calibrates a separate owned kernel signal observer
 using one deliberate `SIGTERM` to its own disposable Python child. It then
 observes each compiled/probe browser's initial network-service threads in a fresh,
 recipient-filtered tracefs instance. Only fixed signal, sender-role and
@@ -160,6 +160,10 @@ remains fatal even if the application subsequently reconnects. Console, CSP,
 outbound, process-replacement and diagnostic bounds remain enforced; the loop
 stops on its first failure and never retries a failed start. Its separate report
 does not replace the original compiled suite or the staged RPC probe.
+Script admission includes the committed standalone `/theme-init.js` initializer
+as well as hashed `/assets/*.js` entries. Both use relative paths inside the
+same compiled build and retain exact byte/size checks; other root scripts,
+traversal, encoded paths and URL/query forms are refused.
 
 Signal reports also retain the helper's actual exit/signal and output
 completeness. A missing or nonzero helper outcome cannot produce a complete

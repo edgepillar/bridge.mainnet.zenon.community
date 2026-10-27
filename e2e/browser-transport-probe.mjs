@@ -11,7 +11,7 @@ import {probeLedgerRound} from './lib/probe-ledger-round.mjs'
 import {verifiedBuild} from './lab/verify-build.mjs'
 import {socketFailureClass} from './lib/socket-evidence.ts'
 import {browserSignalEvidence} from './lib/browser-signal-evidence.ts'
-import {compiledStartupEvidence} from './lib/compiled-startup-evidence.mjs'
+import {compiledStartupEvidence,compiledScriptPath} from './lib/compiled-startup-evidence.mjs'
 const repo=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..')
 const ci=process.env.GITHUB_ACTIONS==='true',parent=process.env.SPV_TASK_SCRATCH??(ci?process.env.RUNNER_TEMP:undefined)
 if(!parent||!path.isAbsolute(parent)||!fs.statSync(parent).isDirectory())throw Error('Owned experiment scratch is required')
@@ -57,8 +57,7 @@ if(compiled){
  if(previous.sourceCommit!==sourceCommit||previous.sourceTree!==sourceTree||previous.sourceDirty||previous.errors.length||previous.lockfileHash!==sha(lockBytes)||!Array.isArray(previous.initialScripts)||!previous.initialScripts.length)throw Error('Compiled fixture source differs or failed')
  const hashes={}
  for(const script of previous.initialScripts){
-  if(typeof script.name!=='string'||!/^\/assets\/[A-Za-z0-9_.-]+\.js$/.test(script.name))throw Error('Compiled script name refused')
-  const file=path.join(repo,'e2e/.state/browser-build',script.name),st=fs.lstatSync(file)
+  const file=path.join(repo,'e2e/.state/browser-build',compiledScriptPath(script.name)),st=fs.lstatSync(file)
   if(!st.isFile()||st.isSymbolicLink()||st.size>4*1024**2||st.size!==script.bytes||sha(fs.readFileSync(file))!==script.sha256)throw Error('Compiled script bytes differ')
   hashes[script.name]=script.sha256
  }

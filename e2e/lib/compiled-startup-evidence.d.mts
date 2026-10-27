@@ -1,3 +1,4 @@
+export function compiledScriptPath(name:unknown):string
 export function compiledStartupEvidence():{
  created(id:string,url:string):void
  handshake(id:string,status:number):void

@@ -1,5 +1,10 @@
 // Pair only the initial compiled client's owned frontier replies. RPC bodies,
 // request IDs and hashes stay inside this closure and never enter the report.
+export function compiledScriptPath(name){
+ if(typeof name!=='string'||!(name==='/theme-init.js'||/^\/assets\/[A-Za-z0-9_.-]+\.js$/.test(name)))throw Error('Compiled script name refused')
+ return name.slice(1)
+}
+
 export function compiledStartupEvidence(){
  const sockets=new Map();let malformed=0,unexpected=0
  const parse=raw=>{if(typeof raw!=='string'||raw.length>65536)return null;try{return JSON.parse(raw)}catch{return null}}
