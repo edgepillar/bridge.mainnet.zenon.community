@@ -117,6 +117,19 @@ explicit; a zero counter does not prove the service never exited. The message
 itself does not distinguish a crash from termination or establish its cause.
 Reporting snapshots precede the fixture's intentional browser shutdown.
 
+When a browser socket error occurs, a single pre-teardown snapshot also records
+deltas of the pinned Chromium utility-process crash, kill and disconnected-alive
+counters. The baseline is taken before navigation; there is no idle polling.
+The [pinned process-type enum](https://github.com/chromium/chromium/blob/3ff7ac5a9224be9156d7f8703a06e22890aafd34/content/public/common/process_type.h#L18)
+and [termination histogram sites](https://github.com/chromium/chromium/blob/3ff7ac5a9224be9156d7f8703a06e22890aafd34/content/browser/browser_child_process_host_impl.cc#L468)
+define the categories. An actual owned-browser SIGKILL calibration increased only
+the utility-kill counter while replacing the network service. It calibrates the
+metric, not the natural Linux failure. These counters cover **all utility
+processes** and do not alone identify a network-service termination or its cause.
+Unknown browser revisions, schemas, deadlines and non-monotone samples remain
+unavailable. Identifiers, paths, arbitrary histogram names and raw query errors
+are excluded. Unexpected socket/console errors remain fatal.
+
 Native stack reports can distinguish fixed downloader wait sites only for the
 exact reviewed Go commit and built downloader file SHA-256. The EOF handoff and the hash reply/timeout select are
 separate categories, as are the first-worker and remaining-worker joins.
