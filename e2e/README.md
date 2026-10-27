@@ -258,3 +258,25 @@ a Node WebSocket writer. Source/build/runtime identities must match the current
 lab manifests. Only bounded ledger reads are sent; no wallet, subscription,
 signature, transfer or chain write is involved. The separate sanitized report
 does not establish an unobserved historical cause or production acceptance.
+
+# Offline browser IPC diagnostics
+
+The compiled-startup experiment alone enables the pinned headless reporter with
+`CHROME_HEADLESS=1`, which disables uploads through Chromium's unattended policy.
+It uses a new private dump directory under the experiment's owned CI scratch and
+first calibrates an intentionally crashed, unconnected `about:blank` renderer.
+That injected renderer crash is reported separately from natural failures.
+The production bundle still fails on its first socket error or network-service
+replacement; failed starts are never retried.
+
+The reader follows only bounded Crashpad annotation structures. It skips report
+and client identifiers, memory, stacks, environment, paths and unrelated annotation
+values. It emits allowlisted Mojo validation/interface/method categories and a
+digest of the selected `mojo-message-error` value; unknown strings are never
+published. Raw minidumps remain in owned runner scratch and are excluded from
+every artifact upload. Missing or refused diagnostics never establish a cause.
+
+The policy and layout follow the pinned Chromium sources for the
+[headless reporter](https://github.com/chromium/chromium/blob/3ff7ac5a9224be9156d7f8703a06e22890aafd34/headless/lib/headless_crash_reporter_client.cc),
+[upload policy](https://github.com/chromium/chromium/blob/3ff7ac5a9224be9156d7f8703a06e22890aafd34/components/crash/core/app/crashpad.cc), and
+[Crashpad format](https://github.com/chromium/chromium/blob/3ff7ac5a9224be9156d7f8703a06e22890aafd34/third_party/crashpad/crashpad/minidump/minidump_extensions.h).
