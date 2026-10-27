@@ -22,9 +22,10 @@ export function readyAtFrontier(anchor, nodes) {
 
 // Failure-only reads distinguish a missing peer set, sync lag and an early
 // fork. Peer identities, addresses, names and raw errors never enter a report.
-export async function readinessFailureDiagnostics(read) {
+export async function readinessFailureDiagnostics(read, comparisonHeight = 2) {
   const ports = [46997, 47100, 47101, 47102, 47103]
   const natural = (n) => Number.isSafeInteger(n) && n >= 0
+  if (!natural(comparisonHeight) || comparisonHeight < 1) throw new Error('Invalid diagnostic comparison height')
   const nodes = await Promise.all(ports.map(async (port) => {
     const unavailable = []
     const capture = async (label, method, params, validate) => {
@@ -46,9 +47,15 @@ export async function readinessFailureDiagnostics(read) {
         return { height: 2, chainIdentifier: 322, hash: m.hash.toLowerCase() }
       }),
     ])
-    return { port, peerCount, sync, earlyMomentum, unavailable: unavailable.sort() }
+    const commonMomentum = comparisonHeight === 2 ? earlyMomentum : await capture('COMMON_MOMENTUM', 'ledger.getMomentumsByHeight', [comparisonHeight, 1], (value) => {
+      const m = value?.list?.[0]
+      if (m?.chainIdentifier !== 322 || m.height !== comparisonHeight || typeof m.hash !== 'string' || !/^[0-9a-f]{64}$/i.test(m.hash)) throw new Error('Invalid common momentum')
+      return { height: m.height, chainIdentifier: 322, hash: m.hash.toLowerCase() }
+    })
+    return { port, peerCount, sync, earlyMomentum, commonMomentum, unavailable: unavailable.sort() }
   }))
   const early = nodes.map((n) => n.earlyMomentum)
   return { schema: 1, scope: 'FAILURE_ONLY_READ_ONLY', status: nodes.some((n) => n.unavailable.length) ? 'PARTIAL' : 'COMPLETE',
-    earlyHeight: 2, earlyHashesAgree: early.some((m) => !m) ? null : agreesAtHeight(early, 2), nodes }
+    earlyHeight: 2, earlyHashesAgree: early.some((m) => !m) ? null : agreesAtHeight(early, 2),
+    comparisonHeight, commonHashesAgree: nodes.some((n) => !n.commonMomentum) ? null : agreesAtHeight(nodes.map((n) => n.commonMomentum), comparisonHeight), nodes }
 }

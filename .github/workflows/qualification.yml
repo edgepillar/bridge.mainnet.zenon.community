@@ -99,12 +99,20 @@ jobs:
           include-hidden-files: true
           retention-days: 14
   isolated-lab:
+    name: isolated-lab (${{ matrix.sync_case }})
+    strategy:
+      fail-fast: false
+      matrix:
+        sync_case: [error-a, error-b, info]
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
       GO_ZENON_DIR: ${{ github.workspace }}/.lab-source
       ANVIL_BIN: ${{ github.workspace }}/.lab-tools/anvil
       EXPECTED_BROWSER_VERSION: 155.0.8059.39
+      LAB_COLD_CASE: ${{ matrix.sync_case }}
+      LAB_RPC_LOG_LEVEL: ${{ matrix.sync_case == 'info' && 'info' || 'error' }}
+      LAB_RPC_PROFILE_MODE: ${{ matrix.sync_case == 'error-b' && 'postmortem' || 'loopback' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -157,7 +165,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: qualification-evidence
+          name: qualification-evidence-${{ matrix.sync_case }}
           path: |
             .browser-results/report.json
             .browser-results/built-report.json

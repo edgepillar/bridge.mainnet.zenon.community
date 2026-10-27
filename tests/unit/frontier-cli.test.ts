@@ -22,11 +22,11 @@ function diagnostic(scenario: string, mode?: string) {
       if(q.method.startsWith('stats.')||(q.method==='ledger.getMomentumsByHeight'&&q.params[0]===2))diagnosticReads++;
       if(q.method==='ledger.getFrontierMomentum'){
         reads++;const lagging=['isolated','early-fork'].includes(scenario)&&url.port==='47100';
-        const height=scenario==='invalid'?'22':['stalled','diag-unavailable','diag-oversize'].includes(scenario)?22:lagging?2:scenario==='moving'?(reads===1?2:22):(reads<=2?2:22);
+        const height=['late-fork','connected-lag'].includes(scenario)?(url.port==='46997'?5:55):scenario==='invalid'?'22':['stalled','diag-unavailable','diag-oversize'].includes(scenario)?22:lagging?2:scenario==='moving'?(reads===1?2:22):(reads<=2?2:22);
         result={chainIdentifier:322,height};
       }else if(q.method==='ledger.getMomentumsByHeight'){
         if(scenario==='diag-unavailable'&&q.params[0]===2)throw Error('PRIVATE_ENDPOINT_AUTH');
-        result={list:['isolated','early-fork'].includes(scenario)&&url.port==='47100'&&q.params[0]>2?[]:[{height:q.params[0],chainIdentifier:322,hash:((scenario==='divergent'&&url.port==='47103')||(scenario==='early-fork'&&url.port==='47100')?'cd':'ab').repeat(32)}]};
+        result={list:['isolated','early-fork'].includes(scenario)&&url.port==='47100'&&q.params[0]>2?[]:[{height:q.params[0],chainIdentifier:322,hash:((scenario==='divergent'&&url.port==='47103')||(scenario==='early-fork'&&url.port==='47100')||(scenario==='late-fork'&&url.port==='46997'&&q.params[0]===5)?'cd':'ab').repeat(32)}]};
       }else if(q.method==='stats.networkInfo'){
         if(scenario==='diag-unavailable')throw Error('PRIVATE_ENDPOINT_AUTH');
         result={numPeers:scenario==='isolated'&&url.port==='47100'?0:4,peers:[{ip:'PRIVATE_IP',publicKey:'PRIVATE_PEER_ID',name:'PRIVATE_NAME'}],self:{ip:'PRIVATE_SELF'}};
@@ -91,6 +91,13 @@ describe('actual readiness CLI exits with synthetic bounded transport', () => {
     expect(result.report.failureDiagnostics).toMatchObject({ status: 'PARTIAL', earlyHashesAgree: null })
     expect(result.report.failureDiagnostics.nodes.every((n: any) => n.unavailable.length === 3)).toBe(true)
     expect(result.stderr + JSON.stringify(result.report)).not.toContain('PRIVATE_')
+  })
+  it.each(['late-fork', 'connected-lag'])('distinguishes %s at the shared frontier even when height two agrees', (scenario) => {
+    const result = diagnostic(scenario, 'native')
+    expect(result.status).toBe(1)
+    expect(result.report.failureDiagnostics).toMatchObject({ earlyHashesAgree: true, comparisonHeight: 5, commonHashesAgree: scenario === 'connected-lag' })
+    expect(result.report.nativeFailure.status).toBe('OWNER_SCOPE_UNAVAILABLE')
+    expect(result.stdout).not.toContain('fixture writes may begin')
   })
   it('bounds diagnostic transport bytes and reports unavailable data without changing readiness', () => {
     const result = diagnostic('diag-oversize', 'native')

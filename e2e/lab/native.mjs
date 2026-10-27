@@ -5,14 +5,23 @@ import path from 'node:path'
 import net from 'node:net'
 import { spawn, execFileSync } from 'node:child_process'
 import { here, digest, verifiedBuild } from './verify-build.mjs'
+import { attachOwnedPostmortem, identityForPostmortem } from './native-postmortem.mjs'
 const manifest = verifiedBuild('native'), pins = manifest.pins
 const root = path.join(here, '.build/native'), assets = path.join(root, 'assets')
 const anvil = process.env.ANVIL_BIN
+const rpcLogLevel = process.env.LAB_RPC_LOG_LEVEL ?? 'error'
+if (!['error', 'info'].includes(rpcLogLevel)) throw new Error('Unsupported isolated RPC diagnostic log level')
+const profileMode = process.env.LAB_RPC_PROFILE_MODE ?? 'loopback'
+if (!['loopback', 'postmortem'].includes(profileMode)) throw new Error('Unsupported isolated RPC profile mode')
+const bridgeHead = execFileSync('git', ['rev-parse', 'HEAD']).toString().trim()
+const bridgeTree = execFileSync('git', ['rev-parse', 'HEAD^{tree}']).toString().trim()
+const coldCase = process.env.LAB_COLD_CASE ?? 'manual'
+if (!['manual', 'error-a', 'error-b', 'info'].includes(coldCase)) throw new Error('Unsupported isolated cold-start case')
 if (!anvil) throw new Error('Set ANVIL_BIN to the pinned Anvil executable')
 const anvilVersion = execFileSync(anvil, ['--version']).toString().trim()
 if (anvilVersion.split('\n')[0] !== `anvil Version: ${pins.anvilVersion}`) throw new Error('Anvil version does not match the lab pin')
 const ports = { pillar: 47010, pillar2: 47012, pillar3: 47013, observer: 47014, rpc: 47011 }
-for (const port of [...Object.values(ports), 46997, 46998, 46545, 47100, 47101, 47102, 47103, 47200, 47201, 47202, 47203]) {
+for (const port of [...Object.values(ports), 46997, 46998, 46545, 47100, 47101, 47102, 47103, 47200, 47201, 47202, 47203, 47210]) {
   await new Promise((resolve, reject) => {
     const server = net.createServer(); server.once('error', reject)
     server.listen(port, '127.0.0.1', () => server.close(resolve))
@@ -24,21 +33,25 @@ if (fs.existsSync(identityFile) && fs.readFileSync(identityFile, 'utf8') !== man
 if (!fs.existsSync(path.join(assets, 'genesis.json'))) execFileSync(process.execPath, [path.join(here, 'make-assets.mjs'), path.join(here, '.build/src/docker/devnet'), assets], { stdio: 'inherit' })
 fs.writeFileSync(identityFile, manifest.key)
 const children = []
+let rpcChild, postmortem
 let stopping = false, failed = false
 const stop = () => {
   if (stopping) return
   stopping = true
+  postmortem?.close()
   for (const child of children) child.kill('SIGTERM')
   setTimeout(() => { for (const child of children) if (child.exitCode === null) child.kill('SIGKILL') }, 2000).unref()
 }
 process.on('SIGINT', stop); process.on('SIGTERM', stop)
 function start(binary, args, log, env = {}) {
-  const fd = fs.openSync(path.join(root, log), 'a')
+  const fd = fs.openSync(path.join(root, log), 'a', 0o600)
   const child = spawn(binary, args, { stdio: ['ignore', fd, fd], env: { ...process.env, ...env } })
   fs.closeSync(fd); children.push(child)
   child.on('error', () => { failed = true; stop() })
-  child.on('exit', () => { if (!stopping) { failed = true; console.error('A lab process exited; stopping the isolated lab'); stop() } })
+  child.on('exit', (code, signal) => { if (child === rpcChild) { try { postmortem?.noteExit(code, signal) } catch { failed = true; console.error('Owned postmortem acknowledgement unavailable') } } if (!stopping) { failed = true; console.error('A lab process exited; stopping the isolated lab'); stop() } })
+  return child
 }
+if (profileMode === 'postmortem') postmortem = await attachOwnedPostmortem({ directory: root, identity: identityForPostmortem({ head: bridgeHead, tree: bridgeTree, build: manifest }), signalRpc: () => rpcChild?.exitCode === null && rpcChild.kill('SIGQUIT') })
 const ipPorts = { 10: 47010, 12: 47012, 13: 47013, 14: 47014, 11: 47011 }
 const configHashes = {}
 let index = 0
@@ -50,7 +63,7 @@ for (const [role, port] of Object.entries(ports)) {
     fixture.Path = file; fs.writeFileSync(file, JSON.stringify(fixture))
   }
   const cfg = JSON.parse(fs.readFileSync(configFile))
-  cfg.DataPath = data; cfg.GenesisFile = path.join(assets, 'genesis.json'); cfg.WalletPath = path.join(data, 'wallet'); cfg.LogLevel = 'error'
+  cfg.DataPath = data; cfg.GenesisFile = path.join(assets, 'genesis.json'); cfg.WalletPath = path.join(data, 'wallet'); cfg.LogLevel = role === 'rpc' ? rpcLogLevel : 'error'
   cfg.Net.ListenHost = '127.0.0.1'; cfg.Net.ListenPort = port
   // Use the pinned source's libp2p backend and an explicit five-node capacity.
   // Legacy discovery on one loopback IP can leave a fixture producer isolated.
@@ -64,10 +77,12 @@ for (const [role, port] of Object.entries(ports)) {
   cfg.RPC.HTTPPort = role === 'rpc' ? 46997 : 47100 + index
   cfg.RPC.WSPort = role === 'rpc' ? 46998 : 47200 + index++
   fs.writeFileSync(configFile, JSON.stringify(cfg)); configHashes[role] = digest(fs.readFileSync(configFile))
-  start(path.join(here, '.build/znnd'), ['--data', data, '--config', configFile], `${role}.log`, { ZNN_DEVNET_BRIDGE: '1', ZNN_BRIDGE_ADMIN: 'z1qq6eg8n43g032hanpsfp02qcdmv7zfj3y2lt5d', GOMAXPROCS: '2', GOMEMLIMIT: '256MiB' })
+  const diagnostics = role === 'rpc' && profileMode === 'loopback' ? ['--pprof', '--pprof.addr', '127.0.0.1', '--pprof.port', '47210'] : []
+  const child = start(path.join(here, '.build/znnd'), [...diagnostics, '--data', data, '--config', configFile], `${role}.log`, { ZNN_DEVNET_BRIDGE: '1', ZNN_BRIDGE_ADMIN: 'z1qq6eg8n43g032hanpsfp02qcdmv7zfj3y2lt5d', GOMAXPROCS: '2', GOMEMLIMIT: '256MiB' })
+  if (role === 'rpc') rpcChild = child
 }
 start(anvil, ['--host', '127.0.0.1', '--port', '46545', '--chain-id', String(pins.chainIds.evm), '--block-time', '1', '--silent'], 'anvil.log')
-fs.writeFileSync(path.join(root, 'run-manifest.json'), JSON.stringify({ sourceCommit: manifest.sourceCommit, sourceTree: manifest.sourceTree, buildKey: manifest.key, znndHash: manifest.binaryHash, anvilHash: digest(fs.readFileSync(anvil)), anvilVersion, genesisHash: digest(fs.readFileSync(path.join(assets, 'genesis.json'))), configHashes, startedAt: new Date().toISOString(), chainIds: pins.chainIds }, null, 2))
+fs.writeFileSync(path.join(root, 'run-manifest.json'), JSON.stringify({ sourceCommit: manifest.sourceCommit, sourceTree: manifest.sourceTree, bridgeSourceCommit: bridgeHead, bridgeSourceTree: bridgeTree, buildKey: manifest.key, znndHash: manifest.binaryHash, anvilHash: digest(fs.readFileSync(anvil)), anvilVersion, genesisHash: digest(fs.readFileSync(path.join(assets, 'genesis.json'))), configHashes, startedAt: new Date().toISOString(), chainIds: pins.chainIds, diagnostics: { profileMode, profileHost: profileMode === 'loopback' ? '127.0.0.1' : null, profilePort: profileMode === 'loopback' ? 47210 : null, rpcLogLevel, coldCase } }, null, 2))
 console.log('Pinned native bridge lab started on loopback; verify chain readiness before fixture writes.')
 await Promise.all(children.map((child) => new Promise((resolve) => child.once('exit', resolve))))
 process.exitCode = failed ? 1 : 0

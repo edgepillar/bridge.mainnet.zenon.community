@@ -9,6 +9,7 @@
 // Native and Docker qualification require five exact-height hash matches.
 import fs from 'node:fs'
 import { execFileSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { readyAtFrontier, readinessFailureDiagnostics } from './readiness.mjs'
 const args = process.argv.slice(2)
 const waitAt = args.indexOf('--wait')
@@ -98,6 +99,8 @@ if (args.includes('--native') || args.includes('--docker')) {
       report.status = 'FAILURE'; record()
       // Preserve the refusal before diagnostics. These bounded reads do not
       // extend qualification, restart a node or release fixture publications.
+      const heights = nodes.map((n) => n.height).filter((n) => Number.isSafeInteger(n) && n >= 1)
+      const comparisonHeight = heights.length === 5 ? Math.min(...heights) : 2
       report.failureDiagnostics = await readinessFailureDiagnostics(async (port, method, params) => {
         const r = await fetch(`http://127.0.0.1:${port}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }), signal: AbortSignal.timeout(2000) })
         if (!r.ok || !r.body) throw new Error('Diagnostic RPC unavailable')
@@ -115,7 +118,52 @@ if (args.includes('--native') || args.includes('--docker')) {
         const p = JSON.parse(Buffer.concat(chunks).toString('utf8'))
         if (p.id !== 1 || p.error || !('result' in p)) throw new Error('Diagnostic RPC failed')
         return p.result
-      })
+      }, comparisonHeight)
+      if (mode === 'native') {
+        report.nativeFailure = { status: 'OWNER_SCOPE_UNAVAILABLE' }
+        try {
+          const { verifiedBuild } = await import('./verify-build.mjs')
+          const { collectNativeFailureFacts, summarizeSyncLog } = await import('./native-diagnostics.mjs')
+          const root = new URL('./.build/native/', import.meta.url)
+          const directory = (url) => { const s = fs.lstatSync(url); if (!s.isDirectory() || s.isSymbolicLink()) throw new Error('Diagnostic directory unavailable') }
+          directory(new URL('./.build/', import.meta.url)); directory(root)
+          const runtimeFile = new URL('run-manifest.json', root), info = fs.lstatSync(runtimeFile)
+          if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.size > 64 * 1024) throw new Error('Diagnostic runtime identity unavailable')
+          const runtime = JSON.parse(fs.readFileSync(runtimeFile)), build = verifiedBuild('native')
+          report.nativeFailure = await collectNativeFailureFacts({ runtime, build, head: report.sourceCommit, tree: report.sourceTree,
+            readProfile: async () => {
+              if (runtime.diagnostics?.profileMode === 'postmortem') {
+                const { requestOwnedPostmortem, identityForPostmortem } = await import('./native-postmortem.mjs')
+                return requestOwnedPostmortem({ directory: fileURLToPath(root), identity: identityForPostmortem({ head: report.sourceCommit, tree: report.sourceTree, build }) })
+              }
+              const r = await fetch('http://127.0.0.1:47210/debug/pprof/goroutine?debug=2', { signal: AbortSignal.timeout(3000) })
+              if (!r.ok || !r.body) throw new Error('Profile unavailable')
+              const reader = r.body.getReader(), chunks = []; let size = 0
+              try { for (;;) { const p = await reader.read(); if (p.done) break; size += p.value.length; if (size > 2 * 1024 * 1024) throw new Error('Profile bound'); chunks.push(Buffer.from(p.value)) } }
+              finally { await reader.cancel() }
+              return Buffer.concat(chunks).toString('utf8')
+            },
+            readLogs: async () => {
+              const result = {}
+              for (const role of ['rpc', 'pillar', 'pillar2', 'pillar3', 'observer']) for (const kind of ['common', 'error']) {
+                const key = role + '-' + kind; result[key] = { status: 'UNAVAILABLE' }
+                try {
+                  directory(new URL(role + '/', root)); directory(new URL(role + '/log/', root))
+                  if (kind === 'error') directory(new URL(role + '/log/error/', root))
+                  const file = new URL(role + '/log/' + (kind === 'error' ? 'error/zenon.error.log' : 'zenon.log'), root), before = fs.lstatSync(file)
+                  if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1) continue
+                  const bytes = Math.min(before.size, 256 * 1024), buffer = Buffer.alloc(bytes), fd = fs.openSync(file, 'r'); let read
+                  try { read = fs.readSync(fd, buffer, 0, bytes, before.size - bytes) } finally { fs.closeSync(fd) }
+                  const after = fs.lstatSync(file)
+                  if (before.dev !== after.dev || before.ino !== after.ino) continue
+                  result[key] = { status: 'CAPTURED', complete: before.size === read, bytesRead: read, ...summarizeSyncLog(buffer.subarray(0, read).toString()) }
+                } catch { /* Missing or replaced logs stay unavailable. */ }
+              }
+              return result
+            },
+          })
+        } catch { /* Never query an unestablished diagnostic owner. */ }
+      }
       record()
       throw new Error('Lab nodes did not converge within the qualification window; inspect readiness-report.json')
     }
