@@ -106,7 +106,7 @@ try{
   const profile=path.join(work,'profile-'+index),memory=memoryModule.browserMemoryEvidence()
   currentMemory=memory
   const crashDirectory=compiled?path.join(work,'crashes-'+index):null
-  const crashOptions=compiled?offlineCrashOptions(puppeteer,crashDirectory):{}
+  const crashOptions=compiled?await offlineCrashOptions(puppeteer,crashDirectory):{}
   browser=await puppeteer.launch({executablePath:process.env.CHROME_PATH,userDataDir:profile,headless:true,...crashOptions})
   const stderr=stderrModule.browserStderrEvidence(!!browser.process().stderr),capture=chunk=>stderr.ingest(chunk)
   currentStderr=stderr

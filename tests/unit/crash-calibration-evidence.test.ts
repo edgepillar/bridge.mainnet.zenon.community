@@ -1,5 +1,7 @@
-import {expect,it} from 'vitest'
-import {calibrationFailureFacts} from '../../e2e/lib/browser-crash-evidence.mjs'
+import {expect,it,vi} from 'vitest'
+import fs from 'node:fs'
+import puppeteer from 'puppeteer-core'
+import {calibrationFailureFacts,offlineCrashOptions} from '../../e2e/lib/browser-crash-evidence.mjs'
 it('classifies protocol refusal without emitting the message',()=>{
  const report=calibrationFailureFacts(Object.assign(new Error('Protocol error (Page.crash): Page has pending navigations, not killing'),{code:-32000}))
  expect(report.category).toBe('PENDING_NAVIGATION');expect(report.protocolCode).toBe(-32000)
@@ -18,3 +20,31 @@ it('handles absent and non-string error fields without decoding them',()=>{
  expect(calibrationFailureFacts(null).category).toBe('UNCLASSIFIED')
  expect(calibrationFailureFacts({message:{secret:'synthetic'}}).category).toBe('UNCLASSIFIED')
 })
+
+async function ownedCiScope(control:()=>Promise<void>){
+ const platform=Object.getOwnPropertyDescriptor(process,'platform')!
+ const github=process.env.GITHUB_ACTIONS
+ const mkdir=vi.spyOn(fs,'mkdirSync').mockImplementation(()=>undefined)
+ Object.defineProperty(process,'platform',{...platform,value:'linux'})
+ process.env.GITHUB_ACTIONS='true'
+ try{await control()}finally{
+  Object.defineProperty(process,'platform',platform)
+  if(github===undefined)delete process.env.GITHUB_ACTIONS
+  else process.env.GITHUB_ACTIONS=github
+  mkdir.mockRestore()
+ }
+}
+it('awaits the installed Puppeteer defaults before preparing offline launch options',async()=>ownedCiScope(async()=>{
+ const defaults=puppeteer.defaultArgs()
+ expect(defaults).toBeInstanceOf(Promise)
+ expect(await defaults).toContain('--disable-crash-reporter')
+ const options=await offlineCrashOptions(puppeteer,'/owned-ci-crash-control')
+ expect(options.ignoreDefaultArgs).toEqual(['--disable-crash-reporter'])
+ expect(options.args).toEqual(['--enable-crash-reporter','--crash-dumps-dir=/owned-ci-crash-control'])
+ expect(options.env.CHROME_HEADLESS).toBe('1')
+ expect(fs.mkdirSync).toHaveBeenCalledExactlyOnceWith('/owned-ci-crash-control',{mode:0o700})
+}))
+it('preserves the reporter-default guard when an asynchronous provider omits the flag',async()=>ownedCiScope(async()=>{
+ await expect(offlineCrashOptions({defaultArgs:async()=>[]},'/owned-ci-crash-control')).rejects.toThrow('Reporter defaults differ')
+ expect(fs.mkdirSync).not.toHaveBeenCalled()
+}))

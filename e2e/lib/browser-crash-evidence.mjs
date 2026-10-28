@@ -13,9 +13,9 @@ export function calibrationFailureFacts(error){
  for(const [fragment,value] of [['Page has pending navigations','PENDING_NAVIGATION'],['Not attached to a page','NO_PAGE'],['wasn\'t found','UNSUPPORTED_COMMAND'],['Target closed','TARGET_CLOSED'],['error while loading shared libraries','MISSING_SHARED_LIBRARY'],['client.StartHandler','HANDLER_START_FAILED'],['--database is required','HANDLER_DATABASE_REQUIRED'],['Crash control deadline','CRASH_EVENT_DEADLINE'],['Crash control reader refused','ANNOTATION_READER_REFUSED'],['Calibration browser differs','BROWSER_IDENTITY_REFUSED'],['Reporter defaults differ','REPORTER_DEFAULTS_DIFFER']])if(text.includes(fragment)){category=value;break}
  return {category,messageSha256:crypto.createHash('sha256').update(text).digest('hex'),messageTruncated:typeof error?.message==='string'&&error.message.length>16384,protocolCode:Number.isSafeInteger(error?.code)&&Math.abs(error.code)<=1_000_000?error.code:null}
 }
-export function offlineCrashOptions(puppeteer,directory){
+export async function offlineCrashOptions(puppeteer,directory){
  if(process.platform!=='linux'||process.env.GITHUB_ACTIONS!=='true'||!path.isAbsolute(directory))throw Error('Offline reporter scope refused')
- if(!puppeteer.defaultArgs().includes('--disable-crash-reporter'))throw Error('Reporter defaults differ')
+ if(!(await puppeteer.defaultArgs()).includes('--disable-crash-reporter'))throw Error('Reporter defaults differ')
  fs.mkdirSync(directory,{mode:0o700})
  return {ignoreDefaultArgs:['--disable-crash-reporter'],args:['--enable-crash-reporter','--crash-dumps-dir='+directory],env:{...process.env,CHROME_HEADLESS:'1'}}
 }
@@ -46,9 +46,9 @@ export async function calibrateOfflineCrashReader(puppeteer,executablePath,work)
  let browser,phase='OPTIONS',ownedTarget,resolveCrash
  const result={status:'FAILURE',scope:'OWNED_ABOUT_BLANK_RENDERER',phase,pageInitialized:false,pageCrashObserved:false,targetCrashObserved:false,injectedRendererCrashRequests:0,injectedRendererCrashes:0,protocolOutcome:'NOT_REQUESTED',mainBrowserAlive:false,browserCloseStatus:'NOT_STARTED',evidence:null,failure:null,rawDumpPublished:false}
  try{
-  const defaults=puppeteer.defaultArgs()
+  const defaults=await puppeteer.defaultArgs()
   result.defaultCrashFlags={disableCrashReporter:defaults.includes('--disable-crash-reporter'),disableBreakpad:defaults.includes('--disable-breakpad')}
-  const options=offlineCrashOptions(puppeteer,directory)
+  const options=await offlineCrashOptions(puppeteer,directory)
   const helper=spawnSync(path.join(path.dirname(executablePath),'chrome_crashpad_handler'),['--help'],{timeout:3000,maxBuffer:64*1024,stdio:['ignore','pipe','pipe']})
   result.helperProbe={actualExit:helper.status,signal:helper.signal,outputComplete:!helper.error&&helper.status!==null,stdoutBytes:helper.stdout?.length??0,stderrBytes:helper.stderr?.length??0,missingSharedLibrary:helper.stderr?.includes(Buffer.from('error while loading shared libraries'))??false}
   phase='LAUNCH'
