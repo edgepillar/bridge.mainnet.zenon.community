@@ -9,7 +9,19 @@ const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true }) })
 function diagnostic(scenario: string, mode?: string) {
   const root = fs.mkdtempSync(path.join(tmpdir(), 'bridge-frontier-cli-')); roots.push(root)
-  for (const name of ['frontier.mjs', 'readiness.mjs']) fs.copyFileSync(fileURLToPath(new URL('../../e2e/lab/' + name, import.meta.url)), path.join(root, name))
+  for (const name of ['frontier.mjs', 'readiness.mjs', 'native-diagnostics.mjs', 'downloader-phase-reset.mjs']) fs.copyFileSync(fileURLToPath(new URL('../../e2e/lab/' + name, import.meta.url)), path.join(root, name))
+  if(scenario==='producer-profile'){
+    const identity=JSON.parse(spawnSync('git',['log','-1','--format={"head":"%H","tree":"%T"}'],{encoding:'utf8'}).stdout)
+    const build={key:'3'.repeat(64),binaryHash:'4'.repeat(64),sourceCommit:'5'.repeat(40),sourceTree:'6'.repeat(40)}
+    fs.mkdirSync(path.join(root,'.build/native'),{recursive:true})
+    fs.writeFileSync(path.join(root,'verify-build.mjs'),'export const verifiedBuild=()=>('+JSON.stringify(build)+')')
+    fs.writeFileSync(path.join(root,'.build/native/run-manifest.json'),JSON.stringify({buildKey:build.key,znndHash:build.binaryHash,sourceCommit:build.sourceCommit,sourceTree:build.sourceTree,bridgeSourceCommit:identity.head,bridgeSourceTree:identity.tree,diagnostics:{profileMode:'postmortem',profileHost:null,profilePort:null,rpcLogLevel:'error',coldCase:'error-b',postmortemRoles:['rpc','pillar','pillar2','pillar3','observer']}}))
+    // Only the owner transport is synthetic; target selection and the CLI are real.
+    fs.writeFileSync(path.join(root,'native-postmortem.mjs'),`import fs from 'node:fs';
+      export const identityForPostmortem=value=>value;
+      const capture=({nodeRole='rpc'})=>{fs.writeFileSync(new URL('./profile-target.json',import.meta.url),JSON.stringify({nodeRole}));return 'goroutine 987654321 [chan receive]:\\ngithub.com/zenon-network/go-zenon/protocol/downloader.(*Downloader).syncWithPeer(0x123, PRIVATE_ARGUMENT)\\n\\tPRIVATE_FILE.go:12 +0x12\\n\\n'};
+      export const requestOwnedPostmortem=capture;export const requestOwnedNodePostmortem=capture;`)
+  }
   // This is a fixture-only subprocess: no RPC listener, chain, wallet or real wait.
   fs.writeFileSync(path.join(root, 'fixture.mjs'), `
     let now=0, reads=0, diagnosticReads=0; const scenario=process.env.FRONTIER_FIXTURE;
@@ -22,7 +34,7 @@ function diagnostic(scenario: string, mode?: string) {
       if(q.method.startsWith('stats.')||(q.method==='ledger.getMomentumsByHeight'&&q.params[0]===2))diagnosticReads++;
       if(q.method==='ledger.getFrontierMomentum'){
         reads++;const lagging=['isolated','early-fork'].includes(scenario)&&url.port==='47100';
-        const height=['late-fork','connected-lag'].includes(scenario)?(url.port==='46997'?5:55):scenario==='invalid'?'22':['stalled','diag-unavailable','diag-oversize'].includes(scenario)?22:lagging?2:scenario==='moving'?(reads===1?2:22):(reads<=2?2:22);
+        const height=scenario==='producer-profile'?(url.port==='47101'?3:41):['late-fork','connected-lag'].includes(scenario)?(url.port==='46997'?5:55):scenario==='invalid'?'22':['stalled','diag-unavailable','diag-oversize'].includes(scenario)?22:lagging?2:scenario==='moving'?(reads===1?2:22):(reads<=2?2:22);
         result={chainIdentifier:322,height};
       }else if(q.method==='ledger.getMomentumsByHeight'){
         if(scenario==='diag-unavailable'&&q.params[0]===2)throw Error('PRIVATE_ENDPOINT_AUTH');
@@ -42,7 +54,7 @@ function diagnostic(scenario: string, mode?: string) {
     cwd: process.cwd(), env: { ...process.env, FRONTIER_FIXTURE: scenario, LAB_RPC: 'http://127.0.0.1:46997' }, encoding: 'utf8', timeout: 8000, maxBuffer: 256 * 1024,
   })
   const report = mode && path.join(root, '.build', mode, 'readiness-report.json')
-  return { ...child, report: report && fs.existsSync(report) ? JSON.parse(fs.readFileSync(report, 'utf8')) : null }
+  return { ...child, report: report && fs.existsSync(report) ? JSON.parse(fs.readFileSync(report, 'utf8')) : null, profileTarget:fs.existsSync(path.join(root,'profile-target.json'))?JSON.parse(fs.readFileSync(path.join(root,'profile-target.json'),'utf8')):null }
 }
 describe('actual readiness CLI exits with synthetic bounded transport', () => {
   it.each(['native', 'docker'])('accepts a cold initial diagnostic only after full %s convergence and subsequent production', (mode) => {
@@ -105,5 +117,12 @@ describe('actual readiness CLI exits with synthetic bounded transport', () => {
     expect(result.report.failureDiagnostics.status).toBe('PARTIAL')
     expect(result.report.failureDiagnostics.nodes.every((n: any) => n.peerCount === null && n.unavailable.includes('NETWORK_INFO'))).toBe(true)
     expect(JSON.stringify(result.report)).not.toContain('PRIVATE_')
+  })
+  it('captures the lagging producer instead of the healthy RPC after preserving the refusal',()=>{
+    const result=diagnostic('producer-profile','native')
+    expect(result.status).toBe(1);expect(result.report.status).toBe('FAILURE')
+    expect(result.profileTarget).toEqual({nodeRole:'pillar2'})
+    expect(result.report.nativeFailure).toMatchObject({status:'CAPTURED',nodeRole:'pillar2',captureMode:'postmortem',target:{nodeRole:'pillar2',port:47101,frontierHeight:3}})
+    expect(result.stdout).not.toContain('fixture writes may begin');expect(JSON.stringify(result.report)).not.toContain('PRIVATE_')
   })
 })

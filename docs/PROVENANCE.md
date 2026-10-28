@@ -1,8 +1,11 @@
 # Source provenance and licensing decisions
 
-The [locked dependency notice inventory](DEPENDENCY_LICENSES.json) records installed
+The [locked dependency notice inventory](DEPENDENCY_LICENSES.json) records CI-observed
 package versions, declared license fields and notice-file digests without author or
-machine metadata. It is a review input for the [acceptance protocol](ACCEPTANCE.md),
+machine metadata. Its source/run/artifact identities bind the observations to three
+independently qualified builds of the exact lockfile. They do not describe the local
+developer installation. The historical inventory remains available in Git history.
+This is a review input for the [acceptance protocol](ACCEPTANCE.md),
 not a bundle composition claim, replacement notice or grant of root licensing
 authority. Every production build now preserves exact locked dependency/font notice
 texts and their digests in `third-party-notices/`; retain that directory in an

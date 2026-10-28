@@ -1,4 +1,4 @@
-// The supervisor signals only its own RPC child, after a bound failure request.
+// The supervisor signals only its own role-bound child after a failure request.
 // Challenges, requests, acknowledgements and raw stderr stay outside artifacts.
 import fs from 'node:fs'
 import path from 'node:path'
@@ -6,13 +6,14 @@ import net from 'node:net'
 import { randomUUID } from 'node:crypto'
 
 const files={owner:'diagnostic-owner.private.json',request:'diagnostic-request.private.json',result:'diagnostic-result.private.json'}
-const keys=['head','tree','buildKey','binaryHash','goCommit','goTree']
+export const nativePostmortemRoles=Object.freeze(['rpc','pillar','pillar2','pillar3','observer'])
+const keys=['head','tree','buildKey','binaryHash','goCommit','goTree','nodeRole']
 const object=v=>v&&typeof v==='object'&&!Array.isArray(v)?v:null
 const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/
-const identityValid=i=>object(i)&&Object.keys(i).length===keys.length&&keys.every(k=>Object.hasOwn(i,k)&&typeof i[k]==='string'&&new RegExp(`^[0-9a-f]{${['buildKey','binaryHash'].includes(k)?64:40}}$`).test(i[k]))
+const identityValid=i=>object(i)&&Object.keys(i).length===keys.length&&keys.every(k=>Object.hasOwn(i,k)&&typeof i[k]==='string'&&(k==='nodeRole'?nativePostmortemRoles.includes(i[k]):new RegExp(`^[0-9a-f]{${['buildKey','binaryHash'].includes(k)?64:40}}$`).test(i[k])))
 const sameIdentity=(a,b)=>identityValid(a)&&identityValid(b)&&keys.every(k=>a[k]===b[k])
-export function identityForPostmortem({head,tree,build}){
- const value={head,tree,buildKey:build?.key,binaryHash:build?.binaryHash,goCommit:build?.sourceCommit,goTree:build?.sourceTree}
+export function identityForPostmortem({head,tree,build,nodeRole='rpc'}){
+ const value={head,tree,buildKey:build?.key,binaryHash:build?.binaryHash,goCommit:build?.sourceCommit,goTree:build?.sourceTree,nodeRole}
  if(!identityValid(value))throw new Error('Postmortem source identity unavailable')
  return value
 }
@@ -32,6 +33,18 @@ export function ownedPostmortemController({identity,challenge,signalRpc}){
  }
 }
 function directory(root){const s=fs.lstatSync(root);if(!s.isDirectory()||s.isSymbolicLink())throw new Error('Postmortem directory unavailable')}
+export function nodePostmortemDirectory({directory:root,nodeRole,create=false}){
+ if(!nativePostmortemRoles.includes(nodeRole))throw new Error('Postmortem node role unavailable')
+ directory(root)
+ let current=root
+ for(const name of ['.postmortem',nodeRole]){
+  current=path.join(current,name)
+  if(create&&!exists(current))fs.mkdirSync(current,{mode:0o700})
+  const info=fs.lstatSync(current)
+  if(!info.isDirectory()||info.isSymbolicLink()||(info.mode&0o777)!==0o700||(typeof process.getuid==='function'&&info.uid!==process.getuid()))throw new Error('Postmortem node directory unavailable')
+ }
+ return current
+}
 function exists(file){try{fs.lstatSync(file);return true}catch(e){if(e.code==='ENOENT')return false;throw new Error('Postmortem file unavailable')}}
 function readRegular(file,cap,privateMode=false){
  const before=fs.lstatSync(file)
@@ -72,7 +85,7 @@ export async function attachOwnedPostmortem({directory:root,identity,signalRpc})
  try{atomicPrivate(root,files.owner,{identity,challenge,controlPort})}catch(error){server.close();throw error}
  return {close(){for(const socket of clients)if(!socket.writableEnded)socket.destroy();server.close()},noteExit(code,signal){const result=controller.exited(code,signal);if(result){atomicPrivate(root,files.result,result);const response=pending;pending=undefined;response?.end(JSON.stringify(result),()=>response.destroy())}}}
 }
-export async function requestOwnedPostmortem({directory:root,identity,timeoutMs=3000}){
+async function requestOwnedExit({directory:root,identity,timeoutMs=3000}){
  directory(root)
  if(!identityValid(identity)||!Number.isInteger(timeoutMs)||timeoutMs<1||timeoutMs>3000)throw new Error('Postmortem request unavailable')
  const owner=JSON.parse(readRegular(path.join(root,files.owner),4096,true).toString())
@@ -92,5 +105,15 @@ export async function requestOwnedPostmortem({directory:root,identity,timeoutMs=
  if(result.status!=='EXITED'||result.challenge!==owner.challenge||!sameIdentity(result.identity,identity)||result.code!==2||result.signal!==null)throw new Error('Postmortem owned exit unavailable')
  const ack=JSON.parse(readRegular(path.join(root,files.result),4096,true).toString())
  if(JSON.stringify(ack)!==JSON.stringify(result))throw new Error('Postmortem acknowledgement changed')
- return readRegular(path.join(root,'rpc.log'),2*1024*1024).toString()
+}
+export async function requestOwnedPostmortem(options){
+ if(options.identity?.nodeRole!=='rpc')throw new Error('RPC postmortem role unavailable')
+ await requestOwnedExit(options)
+ return readRegular(path.join(options.directory,'rpc.log'),2*1024*1024).toString()
+}
+export async function requestOwnedNodePostmortem({directory:root,nodeRole,identity,timeoutMs=3000}){
+ if(!identityValid(identity)||identity.nodeRole!==nodeRole)throw new Error('Postmortem node identity unavailable')
+ const ownerDirectory=nodePostmortemDirectory({directory:root,nodeRole})
+ await requestOwnedExit({directory:ownerDirectory,identity,timeoutMs})
+ return readRegular(path.join(root,nodeRole+'.log'),2*1024*1024).toString()
 }
