@@ -1,12 +1,12 @@
 // The Zenon side: which node the page reads from, the live momentum, and the
 // Syrius wallet.
 //
-// The page reads from the configured default node. The node Syrius reports is
-// used only when the user turns that on and confirms the network the node says
-// it is on (its chain identifier), because that node decides everything the
-// page shows: a devnet node shows that devnet's bridge. The choice is
-// remembered with the chain identifier it was confirmed for, and dropped when
-// either changes.
+// The page reads from the configured default node. The node Syrius reports,
+// or a node the user adds, is used only when the user picks it and confirms
+// the network the node says it is on (its chain identifier), because that
+// node decides everything the page shows: a devnet node shows that devnet's
+// bridge. The choice is remembered with the chain identifier it was confirmed
+// for, and dropped when either changes.
 //
 // Nothing here is tied to chain 1. The bridge's networks, contracts and token
 // pairs are read from the embedded bridge contract of whichever chain the node
@@ -26,12 +26,16 @@ import { config, setActiveChain, zenonNetworkName } from '../config.ts'
 import { ZenonClient, type Momentum } from '../znn/client.ts'
 import { ZenonApi } from '../znn/api.ts'
 import { blockTemplate, type BlockSpec } from '../znn/block.ts'
+import { isUserAddress } from '../znn/primitives.ts'
 import * as syriusWallet from '../wallet/syrius.ts'
-import { journalSubmission } from './operations.ts'
+import * as syriusApp from '../wallet/syriusApp.ts'
+import { NotSubmittedError } from '../core/errors.ts'
+import { journalSubmission, operations, updateOperation } from './operations.ts'
+import { toast, toastError } from './toasts.ts'
 
 export const node = reactive({
   url: config.defaultNode,
-  source: 'default' as 'default' | 'wallet',
+  source: 'default' as 'default' | 'wallet' | 'custom',
   /** The chain identifier the node reports; 0 until it has answered. */
   chainId: 0,
   notice: '',
@@ -87,9 +91,11 @@ function attach(c: ZenonClient, knownChainId = 0) {
     try {
       const m = await c.frontierMomentum()
       if (client !== c || generation !== transport) return
-      if (node.source === 'wallet' && establishedChain && m.chainIdentifier !== establishedChain) {
-        writePref(null)
-        useDefault(`Syrius node changed chain. Reading from ${hostOf(config.defaultNode)}.`)
+      if (node.source !== 'default' && establishedChain && m.chainIdentifier !== establishedChain) {
+        const custom = node.source === 'custom'
+        if (custom) writeSelected(null)
+        else writePref(null)
+        useDefault(`${custom ? 'Your node' : 'Syrius node'} changed chain. Reading from ${hostOf(config.defaultNode)}.`)
         return
       }
       node.chainId = m.chainIdentifier
@@ -164,8 +170,37 @@ async function seedMomentums(owner: ZenonClient, selectedApi: ZenonApi, current:
   }
 }
 
-/** Opens the first default node that answers within 5 s, in config order. */
+/**
+ * Opens the user's own node when one was chosen and it is still on the chain
+ * it was confirmed for; otherwise the first default node that answers within
+ * 5 s, in config order.
+ */
 export async function startNode() {
+  const selected = readSelected()
+  let fallback = ''
+  if (selected) {
+    try {
+      const { probe, chainId } = await probeNode(selected.url)
+      if (chainId === selected.chainId && !client) {
+        node.source = 'custom'
+        attach(probe, chainId)
+        return
+      }
+      probe.close()
+      if (chainId !== selected.chainId) {
+        writeSelected(null)
+        fallback = 'Your node changed chain.'
+      }
+    } catch {
+      fallback = 'Your node is unreachable.'
+    }
+  }
+  try { await startDefault() } finally {
+    if (fallback && node.source === 'default') node.notice = `${fallback} Reading from ${hostOf(config.defaultNode)}.`
+  }
+}
+
+async function startDefault() {
   for (const url of config.defaultNodes) {
     const c = new ZenonClient(url)
     try {
@@ -173,7 +208,7 @@ export async function startNode() {
       config.defaultNode = url
       // A remembered wallet node may have been restored first. Keep that one;
       // otherwise this is the page's connection.
-      if (client && node.source === 'wallet') c.close()
+      if (client && node.source !== 'default') c.close()
       else attach(c, m.chainIdentifier)
       return
     } catch {
@@ -196,11 +231,88 @@ export function nodeProblem(url: string | null): string {
 }
 
 const PREF_KEY = 'bridge.node'
+const NODES_KEY = 'bridge.nodes'
+const SELECTED_KEY = 'bridge.node.custom'
+const MAX_NODES = 8
 
 interface NodePref {
   url: string
   chainId: number
 }
+
+/**
+ * A node address typed by the user, as the client wants it: `wss://host` or
+ * `ws://host:port`, with `https://` and `http://` read as those, and a bare
+ * host read as wss. Null when it is not an address at all.
+ */
+export function normalizeNodeUrl(text: string): string | null {
+  const t = text.trim()
+  if (!t || t.length > 2048 || /\s/.test(t)) return null
+  let u: URL
+  try { u = new URL(/^[a-z][a-z0-9+.-]*:[/]{2}/i.test(t) ? t : `wss://${t}`) } catch { return null }
+  const scheme = { 'https:': 'wss:', 'http:': 'ws:', 'wss:': 'wss:', 'ws:': 'ws:' }[u.protocol]
+  if (!scheme || !u.hostname || u.username || u.password || u.search || u.hash) return null
+  return `${scheme}//${u.host}${u.pathname === '/' ? '' : u.pathname}`
+}
+
+/**
+ * Why the page cannot read from a node the user typed, or '' if it can try.
+ * The CSP (index.html) admits wss to any host and ws only to this machine,
+ * which is also the one exception browsers make to mixed content.
+ */
+export function customNodeProblem(url: string | null): string {
+  if (!url) return 'Not a node address'
+  const u = new URL(url)
+  if (u.protocol === 'ws:' && !['localhost', '127.0.0.1'].includes(u.hostname)) return 'Use wss:// for a remote node'
+  return ''
+}
+
+function validPref(p: unknown): p is NodePref {
+  const r = p as NodePref
+  return !!r && typeof r.url === 'string' && normalizeNodeUrl(r.url) === r.url && !customNodeProblem(r.url) && Number.isSafeInteger(r.chainId) && r.chainId > 0
+}
+
+function readNodes(): NodePref[] {
+  try {
+    const list = JSON.parse(localStorage.getItem(NODES_KEY) ?? '[]') as unknown
+    return Array.isArray(list) ? list.filter(validPref).slice(0, MAX_NODES).map((p) => ({ url: p.url, chainId: p.chainId })) : []
+  } catch {
+    return []
+  }
+}
+
+function writeNodes(list: NodePref[]) {
+  try {
+    if (list.length) localStorage.setItem(NODES_KEY, JSON.stringify(list))
+    else localStorage.removeItem(NODES_KEY)
+  } catch {
+    /* storage blocked: the list lasts for this visit */
+  }
+}
+
+function readSelected(): NodePref | null {
+  try {
+    const p = JSON.parse(localStorage.getItem(SELECTED_KEY) ?? 'null') as unknown
+    return validPref(p) ? { url: p.url, chainId: p.chainId } : null
+  } catch {
+    return null
+  }
+}
+
+function writeSelected(p: NodePref | null) {
+  try {
+    if (p) localStorage.setItem(SELECTED_KEY, JSON.stringify({ url: p.url, chainId: p.chainId }))
+    else localStorage.removeItem(SELECTED_KEY)
+  } catch {
+    /* storage blocked: the choice lasts for this visit */
+  }
+}
+
+/** Nodes the user added, each with the chain it was confirmed on. */
+export const customNodes = reactive({
+  list: readNodes(),
+  problem: '',
+})
 
 function readPref(): NodePref | null {
   try {
@@ -220,12 +332,12 @@ function writePref(p: NodePref | null) {
   }
 }
 
-/** The switch to the wallet's node, and the confirmation it waits on. */
+/** The switch to the wallet's node or a user's node, and the confirmation it waits on. */
 export const walletNode = reactive({
   checking: false,
   problem: '',
   /** Probed and waiting for the user to confirm its network. */
-  pending: null as NodePref | null,
+  pending: null as (NodePref & { kind: 'wallet' | 'custom' }) | null,
 })
 let pendingProbe: ZenonClient | null = null
 let probeEpoch = 0
@@ -267,12 +379,45 @@ export async function requestWalletNode() {
     const { probe, chainId } = await probeNode(url)
     if (request !== probeEpoch || account !== syrius.address || walletUrl !== syrius.nodeUrl) { probe.close(); return }
     pendingProbe = probe
-    walletNode.pending = { url, chainId }
+    walletNode.pending = { url, chainId, kind: 'wallet' }
   } catch {
     if (request === probeEpoch) walletNode.problem = 'Syrius node is unreachable'
   } finally {
     if (request === probeEpoch) walletNode.checking = false
   }
+}
+
+/**
+ * Asks a node the user typed, or picked from their list, which chain it is
+ * on. A listed node still on the chain it was confirmed for is used at once;
+ * anything else waits for confirmWalletNode.
+ */
+export async function useCustomNode(text: string) {
+  cancelWalletNode()
+  customNodes.problem = ''
+  const url = normalizeNodeUrl(text)
+  customNodes.problem = customNodeProblem(url)
+  if (customNodes.problem) return
+  const request = probeEpoch
+  walletNode.checking = true
+  try {
+    const { probe, chainId } = await probeNode(url!)
+    if (request !== probeEpoch) { probe.close(); return }
+    pendingProbe = probe
+    walletNode.pending = { url: url!, chainId, kind: 'custom' }
+    if (customNodes.list.some((n) => n.url === url && n.chainId === chainId)) confirmWalletNode()
+  } catch {
+    if (request === probeEpoch) customNodes.problem = 'Node is unreachable'
+  } finally {
+    if (request === probeEpoch) walletNode.checking = false
+  }
+}
+
+export function removeCustomNode(url: string) {
+  customNodes.list = customNodes.list.filter((n) => n.url !== url)
+  writeNodes(customNodes.list)
+  if (readSelected()?.url === url) writeSelected(null)
+  if (node.source === 'custom' && node.url === url) useDefault()
 }
 
 export function confirmWalletNode() {
@@ -285,9 +430,19 @@ export function confirmWalletNode() {
   } else attach(pendingProbe, p.chainId)
   pendingProbe = null
   walletNode.pending = null
-  node.source = 'wallet'
+  node.source = p.kind
   node.notice = ''
-  writePref(p)
+  const pref = { url: p.url, chainId: p.chainId }
+  // One choice at a time: the wallet's node or the user's own.
+  if (p.kind === 'custom') {
+    customNodes.list = [pref, ...customNodes.list.filter((n) => n.url !== p.url)].slice(0, MAX_NODES)
+    writeNodes(customNodes.list)
+    writeSelected(pref)
+    writePref(null)
+  } else {
+    writeSelected(null)
+    writePref(pref)
+  }
 }
 
 export function cancelWalletNode() {
@@ -301,7 +456,9 @@ export function cancelWalletNode() {
 export function useDefaultNode() {
   cancelWalletNode()
   walletNode.problem = ''
+  customNodes.problem = ''
   writePref(null)
+  writeSelected(null)
   useDefault()
 }
 
@@ -350,7 +507,10 @@ export function hostOf(url: string): string {
 // Syrius
 
 export const syrius = reactive({
+  /** The extension, any version. */
   present: false,
+  /** No extension on a phone: the Syrius app, reached by links (syriusApp.ts). */
+  app: false,
   address: null as string | null,
   chainId: null as number | null,
   nodeUrl: null as string | null,
@@ -372,10 +532,21 @@ async function applyWalletState(s: syriusWallet.WalletState, request: number) {
 }
 
 export async function detectSyrius() {
+  const answer = syriusApp.takeAnswerFromUrl()
+  if (answer) applyAppAnswer(answer)
   const request = walletEpoch
   syrius.present = await syriusWallet.whenProviderReady()
   if (request !== walletEpoch) return
-  if (!syrius.present) return
+  if (!syrius.present) {
+    syrius.app = syriusApp.isPhone()
+    if (!syrius.app) return
+    setAppSession(syriusApp.readSession())
+    // Another tab may be the one the app's answer opened.
+    window.addEventListener('storage', (event) => {
+      if (event.key === syriusApp.SESSION_KEY && walletConnectionWanted) setAppSession(syriusApp.readSession())
+    })
+    return
+  }
   // An origin approved earlier answers without a prompt; a new one answers empty.
   try {
     const s = await syriusWallet.readState()
@@ -392,12 +563,96 @@ export async function detectSyrius() {
 
 export async function connectSyrius() {
   walletConnectionWanted = true
+  if (syrius.app) {
+    syriusApp.openRequest('znn_connect', [])
+    throw new syriusApp.AppHandoffError()
+  }
   const request = ++walletEpoch
   syrius.busy = true
   try {
     await applyWalletState(await syriusWallet.connect({ onHold: (s) => (syrius.hold = s) }), request)
   } finally {
     if (request === walletEpoch) { syrius.busy = false; syrius.hold = 0 }
+  }
+}
+
+/** Where Syrius is published: the extension for each browser and the phone app. */
+export const SYRIUS_RELEASES = 'https://github.com/sol-znn/syrius-extension/releases'
+
+/** The app's chain, asked once after connecting: a link carries one method. */
+export function checkSyriusNetwork() {
+  if (!syrius.app || !syrius.address) return
+  syriusApp.openRequest('znn_chainId', [])
+}
+
+function setAppSession(s: syriusApp.AppSession | null) {
+  syrius.address = s?.address ?? null
+  syrius.chainId = s?.chainId ?? null
+  syrius.nodeUrl = null
+}
+
+const appSent: ((hash: string, record: Record<string, unknown>) => void)[] = []
+/** Called with the record a send asked for, once the app has answered with its hash. */
+export function onAppSent(handler: (hash: string, record: Record<string, unknown>) => void) {
+  appSent.push(handler)
+}
+
+/** Nothing was shown or signed: the app refused before any approval. */
+const APP_REFUSALS = [4001, 4100, -32602, -32005, -32006]
+
+/** An answer the app opened this page with. Unknown ids are someone else's, or expired. */
+export function applyAppAnswer(answer: syriusApp.AppAnswer) {
+  const pending = syriusApp.takePending(answer.id)
+  if (!pending) return toast('Syrius answer expired', 'dim')
+  const code = answer.error?.code
+  const failed = answer.error ? new syriusWallet.WalletError(code!, answer.error.message || 'Syrius failed without saying why') : null
+  if (code === 4100) {
+    syriusApp.writeSession(null)
+    setAppSession(null)
+  }
+  const session = syriusApp.readSession()
+  if (pending.method === 'znn_connect') {
+    const list = answer.result
+    const address = Array.isArray(list) && typeof list[0] === 'string' && isUserAddress(list[0]) ? list[0] : null
+    if (failed || !address) return toastError(failed ?? new Error('Syrius did not connect'))
+    const next = { address, chainId: session?.address === address ? session.chainId : null }
+    syriusApp.writeSession(next)
+    setAppSession(next)
+    return toast('Syrius connected', 'ok')
+  }
+  if (pending.method === 'znn_chainId') {
+    const id = Number(answer.result)
+    if (failed) return toastError(failed)
+    // Not connected, as far as the app knows: it answers null.
+    if (!session || answer.result === null || !Number.isSafeInteger(id) || id <= 0) {
+      syriusApp.writeSession(null)
+      setAppSession(null)
+      return toast('Reconnect your wallet', 'warn')
+    }
+    const next = { address: session.address, chainId: id }
+    syriusApp.writeSession(next)
+    setAppSession(next)
+    return toast(id === chainId() ? 'Network checked' : 'Syrius is on another chain', id === chainId() ? 'ok' : 'warn')
+  }
+  const record = operations.entries.find((r) => r.id === pending.operationId)
+  if (!record || !pending.template) return toast('Send not found. Reload.', 'warn')
+  if (failed) {
+    if (APP_REFUSALS.includes(code!) && record.state === 'unknown' && !record.hash) updateOperation(record.id, { state: 'rejected' })
+    return toastError(failed)
+  }
+  const result = answer.result as syriusWallet.SendAccountBlockResult | null
+  const block = result?.block ?? result?.signedTransaction ?? null
+  try {
+    const sent = syriusWallet.checkedResult(pending.template, result?.hash ?? block?.hash, block, pending.account)
+    updateOperation(record.id, { state: 'submitted', hash: sent.hash })
+    if (pending.record) for (const h of appSent) h(sent.hash, pending.record)
+    toast('Sent', 'wait', { href: onBuildChain() ? config.zenonExplorerTx(sent.hash) : '', label: 'View' })
+  } catch (err) {
+    const reported = err instanceof syriusWallet.WalletOutcomeError ? err.reportedHash : undefined
+    try {
+      if (reported) updateOperation(record.id, { state: 'mismatch', hash: reported, reportedHashes: [reported] })
+    } catch { /* the record keeps what it had; Activity shows it */ }
+    toastError(err)
   }
 }
 
@@ -412,13 +667,19 @@ export async function disconnectSyrius() {
   cancelWalletNode()
   walletNode.problem = ''
   // The choice is kept: the same wallet on the same node and chain restores it.
-  useDefault()
+  if (node.source === 'wallet') useDefault()
+  if (syrius.app) return syriusApp.writeSession(null)
   try { await syriusWallet.disconnect() } catch { /* local disconnect is authoritative */ }
 }
 
-/** Hands a block to Syrius to sign and publish. Resolves with its hash. */
-export async function sendBlock(spec: BlockSpec, beforePrompt: () => void = () => {}): Promise<string> {
+/**
+ * Hands a block to Syrius to sign and publish. Resolves with its hash. The
+ * phone app answers by opening the page again, so there the call ends with
+ * AppHandoffError and `record` is what is remembered when the answer comes.
+ */
+export async function sendBlock(spec: BlockSpec, beforePrompt: () => void = () => {}, record?: Record<string, unknown>): Promise<string> {
   if (!syrius.address) throw new Error('Connect Syrius first')
+  if (syrius.app && syrius.chainId === null) throw new NotSubmittedError('Check network first')
   if (wrongZenonChain()) throw new Error(`Syrius is on chain ${syrius.chainId}, the page on chain ${chainId()}`)
   const account = syrius.address, selectedChain = node.chainId, epoch = node.epoch, selectedApi = api.value
   if (!selectedChain || !nodeIsCurrent() || !selectedApi) throw new Error('Node identity or freshness is unavailable')
@@ -430,7 +691,11 @@ export async function sendBlock(spec: BlockSpec, beforePrompt: () => void = () =
   }
   syrius.busy = true
   try {
-    const result = await journalSubmission({ source: 'zenon', chainId: selectedChain, account, kind: 'zenon-send', payload }, guard, async () => {
+    const result = await journalSubmission({ source: 'zenon', chainId: selectedChain, account, kind: 'zenon-send', payload }, guard, async (operationId) => {
+      if (syrius.app) {
+        syriusApp.openRequest('znn_signAndSendBlock', template, { operationId, template, account, record })
+        throw new syriusApp.AppHandoffError()
+      }
       const sent = await syriusWallet.sendAccountBlock(template, { onHold: (s) => (syrius.hold = s), beforePrompt: guard, account })
       return sent.hash
     })

@@ -7,9 +7,9 @@ import Banner from './components/Banner.vue'
 import Address from './components/Address.vue'
 import StatusChip from './components/StatusChip.vue'
 import zenonMark from './assets/zenon.svg'
-import { route, ROUTES, go, type Route } from './state/router.ts'
+import { route, NAV, go, type Route } from './state/router.ts'
 import { theme, toggleTheme } from './state/theme.ts'
-import { node, syrius, wrongZenonChain, hostOf, chainId, networkLabel, requestWalletNode, walletNode } from './state/zenon.ts'
+import { node, syrius, wrongZenonChain, hostOf, chainId, networkLabel, requestWalletNode, walletNode, checkSyriusNetwork } from './state/zenon.ts'
 import { bridge, bridgeDown, transferBlocker } from './state/bridge.ts'
 import { referrer, clearReferral } from './state/referral.ts'
 import { actionCount } from './state/activity.ts'
@@ -25,7 +25,7 @@ const views = {
   affiliate: defineAsyncComponent(() => import('./views/AffiliateView.vue')),
 }
 const current = computed(() => views[route.value])
-// A phone's tab bar has room for a mark, not for five words.
+// A phone's tab bar has room for a mark, not for four words.
 const ICONS: Record<Route, Component> = { bridge: ArrowLeftRight, activity: History, liquidity: Droplets, stats: ChartNoAxesColumn, affiliate: Gift }
 const hrefOf = (id: Route) => (id === 'bridge' ? '#/' : '#/' + id)
 
@@ -51,15 +51,16 @@ watch(
 )
 // The bridge's state says nothing about a swap, and a swap's routers nothing about the bridge.
 const swapping = computed(() => route.value === 'bridge' && mode.value === 'swap')
-const downMessage = computed(() => {
+// One down state, said once. The header chip links to Status, which has the
+// detail, so the banner carries only what it means for a send.
+const downBanner = computed(() => {
   const blocker = transferBlocker()
-  if (blocker && !['Bridge is unavailable', 'Bridge is paused'].includes(blocker)) return blocker + '. Refresh before sending.'
-  // Stalled: the banner says what it means for the user; Stats has the detail.
-  if (bridge.health?.state === 'down') return config.swap ? 'EVM swaps use separate routers.' : ''
-  if (bridge.health?.message && bridgeDown()) return bridge.health.message
-  if (bridge.info?.halted) return 'The bridge is halted. Transfers are paused.'
-  if (bridge.info?.allowKeyGen) return 'Orchestrators are generating a new key. Transfers wait until it is done.'
-  return ''
+  if (blocker && !['Bridge is unavailable', 'Bridge is paused'].includes(blocker)) return { title: blocker + '.', body: '' }
+  if (bridge.info?.halted) return { title: 'Bridge is halted.', body: 'Transfers are paused.' }
+  if (bridge.info?.allowKeyGen) return { title: 'New key in progress.', body: 'Transfers wait.' }
+  if (bridge.health?.state === 'down') return { title: 'Bridge is stalled.', body: config.swap ? 'Swaps still work.' : '' }
+  if (bridge.health?.message && bridgeDown()) return { title: bridge.health.message, body: '' }
+  return null
 })
 // The header's one-word verdict. The contract's own switches answer before
 // the scan of orchestrator blocks has finished.
@@ -88,7 +89,7 @@ const status = computed(() => {
         </a>
         <span v-if="chainId() !== 1" class="chip chip-warn mono hidden sm:inline-flex" data-testid="network-chip">{{ networkLabel() }} {{ chainId() }}</span>
         <nav class="ml-2 hidden items-center gap-1 xl:flex">
-          <a v-for="r in ROUTES" :key="r.id" :href="hrefOf(r.id)" class="nav-link" :class="{ active: route === r.id }">
+          <a v-for="r in NAV" :key="r.id" :href="hrefOf(r.id)" class="nav-link" :class="{ active: route === r.id }" :aria-current="route === r.id ? 'page' : undefined">
             {{ r.label }}<span v-if="r.id === 'activity' && actionCount()" class="dot-count">{{ actionCount() }}</span>
           </a>
         </nav>
@@ -111,6 +112,9 @@ const status = computed(() => {
               <a class="menu-row" href="https://github.com/sol-znn/bridge.mainnet.zenon.community" target="_blank" rel="noopener">
                 <CodeXml :size="15" /><span class="flex-1">Source</span>
               </a>
+              <a class="menu-row" href="#/affiliate" data-testid="menu-referral" @click="more = false">
+                <Gift :size="15" /><span class="flex-1">Referral</span>
+              </a>
             </div>
           </Transition>
         </div>
@@ -121,23 +125,29 @@ const status = computed(() => {
       <Banner v-if="swapping && swapMessage" tone="danger">
         <strong>Swaps are unavailable.</strong> {{ swapMessage }}
       </Banner>
-      <Banner v-if="(downMessage || bridge.health?.state === 'down') && route !== 'stats' && !swapping && !downHidden" tone="danger" dismissable @dismiss="downHidden = true">
-        <strong>{{ networkLabel() }} bridge is down.</strong> {{ downMessage }}
-        <template #action><a href="#/stats" class="btn btn-ghost btn-sm -my-1 !text-inherit">Status</a></template>
+      <Banner v-if="downBanner && route !== 'stats' && !swapping && !downHidden" tone="danger" dismissable data-testid="down-banner" @dismiss="downHidden = true">
+        <strong>{{ downBanner.title }}</strong> {{ downBanner.body }}
       </Banner>
-      <Banner v-if="wrongZenonChain()" tone="wait">
+      <Banner v-if="syrius.app && syrius.address && syrius.chainId === null" tone="wait" data-testid="app-network">
+        Check the network Syrius is on.
+        <template #action>
+          <button class="btn btn-sm -my-1" @click="checkSyriusNetwork">Check network</button>
+        </template>
+      </Banner>
+      <Banner v-else-if="wrongZenonChain()" tone="wait">
         <span class="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
           <span>Syrius</span><span class="chip chip-dim mono">{{ zenonNetworkName(syrius.chainId!) }} {{ syrius.chainId }}</span>
           <span>Page</span><span class="chip chip-dim mono">{{ networkLabel() }} {{ chainId() }}</span>
         </span>
         <template #action>
-          <button class="btn btn-sm -my-1" data-testid="use-wallet-node" :disabled="walletNode.checking" @click="requestWalletNode">Use Syrius node</button>
+          <button v-if="syrius.app" class="btn btn-sm -my-1" @click="checkSyriusNetwork">Check again</button>
+          <button v-else class="btn btn-sm -my-1" data-testid="use-wallet-node" :disabled="walletNode.checking" @click="requestWalletNode">Use Syrius node</button>
         </template>
       </Banner>
       <Banner v-if="walletNode.problem" tone="warn" dismissable @dismiss="walletNode.problem = ''">{{ walletNode.problem }}.</Banner>
       <Banner v-if="node.notice && !noticeHidden" tone="wait" dismissable @dismiss="noticeHidden = true">{{ node.notice }}</Banner>
       <Banner v-if="referrer" tone="new">
-        Referral from <Address :value="referrer" :copy="false" class="text-fg" />. Any bonus depends on the recipient, token and current program eligibility shown in the transfer quote.
+        Referral from <Address :value="referrer" :copy="false" class="text-fg" />
         <template #action><button class="btn btn-ghost btn-sm -my-1 !text-inherit" @click="clearReferral">Clear</button></template>
       </Banner>
     </div>
@@ -150,7 +160,7 @@ const status = computed(() => {
 
     <!-- A phone navigates from the bottom, where the thumb is. -->
     <nav class="dock xl:hidden" aria-label="Sections">
-      <a v-for="r in ROUTES" :key="r.id" :href="hrefOf(r.id)" class="dock-link" :class="{ active: route === r.id }" :aria-label="r.label">
+      <a v-for="r in NAV" :key="r.id" :href="hrefOf(r.id)" class="dock-link" :class="{ active: route === r.id }" :aria-label="r.label" :aria-current="route === r.id ? 'page' : undefined">
         <component :is="ICONS[r.id]" :size="20" />
         <span v-if="r.id === 'activity' && actionCount()" class="dot-count dock-count">{{ actionCount() }}</span>
       </a>
@@ -158,9 +168,10 @@ const status = computed(() => {
 
     <div class="toasts" aria-live="polite">
       <TransitionGroup name="fade">
-        <div v-for="t in toasts" :key="t.id" class="toast" :class="'toast-' + t.tone" @click="dismiss(t.id)">
+        <div v-for="t in toasts" :key="t.id" class="toast" :class="'toast-' + t.tone" role="status" @click="dismiss(t.id)">
           <span>{{ t.text }}</span>
           <a v-if="t.link" :href="t.link.href" target="_blank" rel="noopener" class="link ml-2" @click.stop>{{ t.link.label }}</a>
+          <span class="toast-bar" :style="{ animationDuration: t.ms + 'ms' }" aria-hidden="true" />
         </div>
       </TransitionGroup>
     </div>
@@ -191,6 +202,9 @@ const status = computed(() => {
 }
 .brand:hover {
   transform: scale(1.03);
+}
+.brand img {
+  filter: drop-shadow(0 0 10px color-mix(in srgb, var(--znn) 30%, transparent));
 }
 .nav-link {
   position: relative;
@@ -261,7 +275,7 @@ const status = computed(() => {
   left: 12px;
   z-index: 30;
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 4px;
   padding: 6px;
   border-radius: 22px;
@@ -315,28 +329,51 @@ const status = computed(() => {
     bottom: 20px;
   }
 }
+/* One toast at a time, with a bar that drains while it stays: the reader sees
+   how long it has without a close button to aim for. */
 .toast {
+  --tone: var(--dim);
+  position: relative;
+  overflow: hidden;
   pointer-events: auto;
   max-width: 420px;
-  padding: 12px 16px;
+  padding: 12px 16px 14px;
   font-size: 14px;
   border-radius: 16px;
-  background: var(--surface);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  backdrop-filter: blur(14px);
   border: 1px solid var(--line);
-  border-left: 3px solid var(--dim);
   box-shadow: var(--edge), var(--shadow-pop);
   cursor: pointer;
 }
 .toast-ok {
-  border-left-color: var(--ok);
+  --tone: var(--ok);
 }
 .toast-wait {
-  border-left-color: var(--wait);
+  --tone: var(--wait);
 }
 .toast-warn {
-  border-left-color: var(--warn);
+  --tone: var(--warn);
 }
 .toast-danger {
-  border-left-color: var(--danger);
+  --tone: var(--danger);
+}
+.toast-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: var(--tone);
+  transform-origin: left;
+  animation: toast-drain linear forwards;
+}
+@keyframes toast-drain {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
 }
 </style>

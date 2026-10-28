@@ -3,13 +3,14 @@
 import { ref } from 'vue'
 
 export type Route = 'bridge' | 'activity' | 'liquidity' | 'stats' | 'affiliate'
-export const ROUTES: Array<{ id: Route; label: string }> = [
-  { id: 'bridge', label: 'Bridge' },
-  { id: 'activity', label: 'Activity' },
-  { id: 'liquidity', label: 'Liquidity' },
-  { id: 'stats', label: 'Stats' },
-  { id: 'affiliate', label: 'Affiliate' },
+export const ROUTES: Array<{ id: Route; label: string; nav: boolean }> = [
+  { id: 'bridge', label: 'Bridge', nav: true },
+  { id: 'activity', label: 'Activity', nav: true },
+  { id: 'liquidity', label: 'Liquidity', nav: true },
+  { id: 'stats', label: 'Status', nav: true },
+  { id: 'affiliate', label: 'Referral', nav: false },
 ]
+export const NAV = ROUTES.filter((r) => r.nav)
 
 function parse(): Route {
   const h = location.hash.replace(/^#\/?/, '').split(/[/?]/)[0]

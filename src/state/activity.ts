@@ -4,7 +4,7 @@
 // core/status.ts, refreshed on the momentum beat.
 
 import { reactive, watch } from 'vue'
-import { api, node, syrius, chainId as zenonChain } from './zenon.ts'
+import { api, node, syrius, chainId as zenonChain, onAppSent } from './zenon.ts'
 import { config } from '../config.ts'
 import { evm, walletForReads } from './evm.ts'
 import { bridge, nodeContext, routeByEvmToken, routeByZts } from './bridge.ts'
@@ -116,12 +116,12 @@ function load(): LocalRecord[] {
     if (!Array.isArray(raw) || raw.length > 10_000) throw new Error('Malformed local history')
     const records = raw.filter(validLocal)
     if (records.length !== raw.length) {
-      localStorageProblem = 'Some local history is unreadable. Original storage is retained; restore the original hashes before relying on this history.'
+      localStorageProblem = 'Some saved rows are unreadable. Kept as they were.'
       try { localStorage.setItem(KEY + '.quarantine', JSON.stringify(raw)) } catch { /* original storage is retained */ }
     }
     return records
   } catch {
-    localStorageProblem = 'Local history is unavailable. Original storage is retained; recover the original transaction identities.'
+    localStorageProblem = 'Saved rows are unreadable. Kept as they were.'
     return []
   }
 }
@@ -132,7 +132,7 @@ function save() {
     const retained = activity.local.filter((r) => !r.terminal).concat(activity.local.filter((r) => r.terminal).slice(0, 200))
     localStorage.setItem(KEY, JSON.stringify(retained))
   } catch {
-    activity.storageError = 'Cannot save local history. Keep the original transaction hashes.'
+    activity.storageError = "Can't save rows. Keep your transaction hashes."
   }
 }
 
@@ -146,6 +146,14 @@ export function remember(r: LocalRecord) {
   save()
   void refreshActivity()
 }
+
+// A wrap sent through the Syrius app is remembered when the app's answer
+// opens the page, which may be another tab or a fresh load.
+onAppSent((hash, record) => {
+  try {
+    if (!activity.local.some((r) => r.kind === 'wrap' && r.id === hash)) remember({ ...record, id: hash } as LocalRecord)
+  } catch { /* the wrap still shows from the sender's history */ }
+})
 
 /** Addresses whose history is read: the connected ones and every recipient used here. */
 function addresses() {
@@ -260,7 +268,7 @@ export function refreshActivity(): Promise<void> {
         save()
       }
     } catch (error) {
-      if (current()) { activity.error = error instanceof Error ? error.message : 'History unavailable'; activity.readAt = 0 }
+      if (current()) { activity.error = error instanceof Error && error.message === 'History changed while paging' ? 'History changed while reading. Refresh.' : 'History unavailable'; activity.readAt = 0 }
     } finally {
       if (current()) { active = null; activity.loading = false }
     }

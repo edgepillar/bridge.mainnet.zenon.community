@@ -1,8 +1,8 @@
 <script setup lang="ts">
-// Bridge and network stats, read from the chain. Orchestrator status is
+// Bridge and network status, read from the chain. Orchestrator status is
 // derived (core/orchestrators.ts): no monitoring service is involved.
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { RefreshCw, ExternalLink } from '@lucide/vue'
+import { RefreshCw, ExternalLink, ChevronDown, Check, Minus, ArrowUpRight, ArrowDownLeft } from '@lucide/vue'
 import TokenIcon from '../components/TokenIcon.vue'
 import Amount from '../components/Amount.vue'
 import Address from '../components/Address.vue'
@@ -47,7 +47,7 @@ async function loadExtras() {
     extrasReadAt.value = Date.now()
     extrasError.value = ''
   } catch {
-    if (current()) extrasError.value = 'Some statistics are unavailable. Retained values are a previous snapshot.'
+    if (current()) extrasError.value = 'Some figures unavailable. Showing the last read.'
   } finally {
     if (current()) loading.value = false
   }
@@ -81,12 +81,31 @@ const zenonTokens = computed(() => {
 })
 const affiliate = computed(() => Object.entries(bridge.meta.affiliateProgram?.networks ?? {}))
 const momentumTime = computed(() => bridge.orch?.estimatedMomentumTime || 10)
+// What the state means, in the fewest words that are still true. The
+// derivation samples recent blocks: it sees signing, not readiness.
+const verdict = computed(() => {
+  const s = h.value?.state
+  if (h.value?.message) return h.value.message
+  if (s === 'online') return 'Signing recently.'
+  if (s === 'idle') return 'No signing lately.'
+  return 'Status unknown.'
+})
+const iso = (ms: number) => new Date(ms).toISOString()
+const halted = (v: boolean | null | undefined) =>
+  v ? { tone: 'danger' as const, label: 'Halted' } : v === null || v === undefined ? { tone: 'dim' as const, label: 'Unknown' } : { tone: 'ok' as const, label: 'Running' }
+const delays = (momentums: number, evmBlocks: bigint | number | undefined, blockTime: number | undefined) => {
+  const blocks = evmBlocks === undefined ? undefined : Number(evmBlocks)
+  return {
+    text: `${duration(momentums * momentumTime.value)} · ${blocks !== undefined && blockTime ? duration(blocks * blockTime) : '–'}`,
+    title: `${momentums} momentums on Zenon · ${blocks ?? '–'} blocks on the EVM side`,
+  }
+}
 </script>
 
 <template>
   <section class="rise grid grid-cols-1 gap-6">
     <div class="flex items-center gap-3">
-      <h1 class="text-2xl font-semibold">Stats</h1>
+      <h1 class="text-2xl font-semibold">Status</h1>
       <button class="btn btn-ghost btn-sm" aria-label="Refresh" :disabled="loading || bridge.healthLoading" @click="refresh">
         <RefreshCw :size="15" :class="{ spin: loading || bridge.healthLoading }" />
       </button>
@@ -100,12 +119,11 @@ const momentumTime = computed(() => bridge.orch?.estimatedMomentumTime || 10)
           <StatusChip v-if="h" data-testid="orchestrator-state" :tone="h.tone" :label="h.label" />
           <span v-else class="skeleton h-6 w-20" />
         </div>
-        <p v-if="h?.message" class="mt-2 text-[15px] text-fg">{{ h.message }}</p>
-        <p v-else-if="h?.state === 'online'" class="mt-2 text-[15px] text-soft">Recent signing activity was observed in the sampled history.</p>
-        <p v-else-if="h?.state === 'idle'" class="mt-2 text-[15px] text-soft">No recent signing activity was observed. Operator readiness is not established.</p>
-        <p v-else class="mt-2 text-[15px] text-soft">Signing status is unavailable. Operator readiness is not established.</p>
-        <p v-if="bridge.healthError || !bridge.healthAt" class="mt-2 text-sm text-warn">Health reads are unavailable or being refreshed. Retained results do not establish current readiness.</p>
-        <p v-else class="mt-2 text-xs text-dim">Read {{ new Date(bridge.healthAt).toISOString() }} · up to 300 bridge blocks scanned · {{ bridge.healthSampled ? 'unsigned requests sampled' : 'unsigned request page complete' }}.</p>
+        <p class="mt-2 text-[15px]" :class="h?.message ? 'text-fg' : 'text-soft'">{{ verdict }}</p>
+        <p v-if="bridge.healthError || !bridge.healthAt" class="mt-2 text-sm text-warn">Health unavailable. Showing the last read.</p>
+        <p v-else class="mt-2 text-xs text-dim" :title="iso(bridge.healthAt)">
+          Read {{ ago(bridge.healthAt / 1000, now) }} · 300 blocks scanned · {{ bridge.healthSampled ? 'unsigned sampled' : 'all unsigned read' }}
+        </p>
       </div>
       <div class="kpis">
         <div>
@@ -117,13 +135,12 @@ const momentumTime = computed(() => bridge.orch?.estimatedMomentumTime || 10)
           <div class="kpi">{{ h ? bridge.unsignedCount : '–' }}</div>
         </div>
         <div>
-          <div class="label">Oldest sampled wait</div>
+          <div class="label">Oldest wait</div>
           <div class="kpi">{{ h?.oldestWaitSeconds ? duration(h.oldestWaitSeconds) : '–' }}</div>
         </div>
-        <div>
-          <div class="label">Producers seen in 24h</div>
+        <div title="Seen producing bridge blocks. Not a measure of signing readiness.">
+          <div class="label">Producers, 24h</div>
           <div class="kpi">{{ h ? activeCount : '–' }}</div>
-          <div class="text-xs text-dim">Sampled activity does not measure TSS readiness.</div>
         </div>
       </div>
 
@@ -142,7 +159,7 @@ const momentumTime = computed(() => bridge.orch?.estimatedMomentumTime || 10)
       <div class="border-t border-line">
         <div class="flex items-center justify-between px-4 pt-3 md:px-5">
           <span class="label">Seen signing</span>
-          <span v-if="h?.scannedSince" class="text-xs text-dim">since {{ new Date(h.scannedSince * 1000).toISOString().slice(0, 10) }}</span>
+          <span v-if="h?.scannedSince" class="text-xs text-dim" :title="iso(h.scannedSince * 1000)">since {{ ago(h.scannedSince, now) }}</span>
         </div>
         <div class="table-wrap">
           <table class="data">
@@ -151,18 +168,18 @@ const momentumTime = computed(() => bridge.orch?.estimatedMomentumTime || 10)
             </thead>
             <tbody>
               <tr v-for="o in h?.orchestrators ?? []" :key="o.producer">
-                <td>
+                <td class="lead">
                   <span class="inline-flex items-center gap-2">
                     <span class="state-dot" :class="now - o.lastSeen <= ACTIVE_WITHIN_S ? 'on' : 'off'" />
                     {{ o.name ?? 'Unknown' }}
                   </span>
                 </td>
-                <td><Address :value="o.producer" :href="config.zenonExplorerAddress(o.producer)" :copy="false" /></td>
-                <td class="num mono">{{ o.signs }}</td>
-                <td class="num mono">{{ o.unwraps }}</td>
-                <td class="num text-soft">{{ ago(o.lastSeen, now) }}</td>
+                <td data-label="Producer"><Address :value="o.producer" :href="config.zenonExplorerAddress(o.producer)" :copy="false" /></td>
+                <td data-label="Signed" class="num mono">{{ o.signs }}</td>
+                <td data-label="Unwraps" class="num mono">{{ o.unwraps }}</td>
+                <td data-label="Last seen" class="num text-soft">{{ ago(o.lastSeen, now) }}</td>
               </tr>
-              <tr v-if="h && !h.orchestrators.length"><td colspan="5" class="text-soft">None yet</td></tr>
+              <tr v-if="h && !h.orchestrators.length"><td colspan="5" class="lead text-soft">None yet</td></tr>
             </tbody>
           </table>
         </div>
@@ -170,31 +187,31 @@ const momentumTime = computed(() => bridge.orch?.estimatedMomentumTime || 10)
     </div>
 
     <p v-if="extrasError" class="text-sm text-warn">{{ extrasError }}</p>
-    <p v-else-if="extrasReadAt" class="text-xs text-dim">Statistics read {{ new Date(extrasReadAt).toISOString() }}.</p>
 
     <!-- Network -->
     <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
       <div class="panel p-4">
         <div class="label">Momentum</div>
         <div class="kpi mono">{{ node.height ? node.height.toLocaleString('en-US') : '–' }}</div>
-        <div class="text-sm text-dim">{{ node.rate.toFixed(1) }} s each, target {{ momentumTime }} s</div>
+        <div class="text-sm text-dim">{{ node.rate.toFixed(1) }}s, target {{ momentumTime }}s</div>
       </div>
-      <div class="panel p-4">
+      <div class="panel p-4" :title="extrasReadAt ? 'Read ' + iso(extrasReadAt) : undefined">
         <div class="label">Wraps</div>
         <div class="kpi mono">{{ totals?.wraps.toLocaleString('en-US') ?? '–' }}</div>
-        <div class="text-sm text-dim">Zenon to EVM, all time</div>
+        <div class="text-sm text-dim">Zenon to EVM</div>
       </div>
-      <div class="panel p-4">
+      <div class="panel p-4" :title="extrasReadAt ? 'Read ' + iso(extrasReadAt) : undefined">
         <div class="label">Unwraps</div>
         <div class="kpi mono">{{ totals?.unwraps.toLocaleString('en-US') ?? '–' }}</div>
-        <div class="text-sm text-dim">EVM to Zenon, all time</div>
+        <div class="text-sm text-dim">EVM to Zenon</div>
       </div>
       <div class="panel p-4">
         <div class="label">Bridge</div>
         <div class="kpi">
-          <StatusChip v-if="bridge.info" :tone="bridge.info.halted ? 'danger' : 'ok'" :label="bridge.info.halted ? 'Halted' : 'Not halted'" />
+          <StatusChip v-if="bridge.info" v-bind="halted(bridge.info.halted)" />
+          <span v-else>–</span>
         </div>
-        <div class="text-sm text-dim">Key nonce {{ bridge.info?.tssNonce ?? '–' }}{{ bridge.info?.allowKeyGen ? ' · key generation open' : '' }}</div>
+        <div class="text-sm text-dim">Key nonce {{ bridge.info?.tssNonce ?? '–' }}{{ bridge.info?.allowKeyGen ? ' · new key open' : '' }}</div>
       </div>
     </div>
 
@@ -204,11 +221,7 @@ const momentumTime = computed(() => bridge.orch?.estimatedMomentumTime || 10)
         <TokenIcon :network="n.name" :size="24" />
         <h2 class="text-lg font-semibold">{{ n.name }}</h2>
         <span class="mono text-sm text-dim">chain {{ n.chainId }}</span>
-        <StatusChip
-          v-if="bridge.evmNetworks[n.chainId]"
-          :tone="bridge.evmNetworks[n.chainId].halted ? 'danger' : bridge.evmNetworks[n.chainId].halted === null ? 'dim' : 'ok'"
-          :label="bridge.evmNetworks[n.chainId].halted ? 'Halted' : bridge.evmNetworks[n.chainId].halted === null ? 'Unread' : 'Not halted'"
-        />
+        <StatusChip v-if="bridge.evmNetworks[n.chainId]" v-bind="halted(bridge.evmNetworks[n.chainId].halted)" />
         <a
           v-if="evmAddressUrl(n.chainId, n.contractAddress)"
           :href="evmAddressUrl(n.chainId, n.contractAddress)"
@@ -219,7 +232,7 @@ const momentumTime = computed(() => bridge.orch?.estimatedMomentumTime || 10)
         /></a>
       </div>
       <div class="px-4 pt-1 text-sm text-dim md:px-5">
-        {{ bridge.evmNetworks[n.chainId]?.confirmations ?? '–' }} confirmations · {{ bridge.evmNetworks[n.chainId]?.blockTime ?? '–' }} s blocks
+        {{ bridge.evmNetworks[n.chainId]?.confirmations ?? '–' }} confirmations · {{ bridge.evmNetworks[n.chainId]?.blockTime ?? '–' }}s blocks
       </div>
       <div class="table-wrap mt-2">
         <table class="data">
@@ -229,17 +242,26 @@ const momentumTime = computed(() => bridge.orch?.estimatedMomentumTime || 10)
               <th>{{ n.name }}</th>
               <th class="num">Fee</th>
               <th class="num">Min</th>
-              <th class="num">Delay</th>
+              <th class="num" title="Redeem delay: on Zenon · on the EVM side">Delay</th>
               <th>Open</th>
               <th class="num">Fees held</th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="r in bridge.routes.filter((x) => x.chainId === n.chainId)" :key="r.key">
-              <td>
+              <td class="lead">
                 <span class="inline-flex items-center gap-2"><TokenIcon :symbol="r.zts?.symbol" chain="Zenon" :size="24" />{{ r.zts?.symbol ?? '?' }}</span>
+                <span class="pair-arrow text-dim">⇄</span>
+                <a
+                  class="pair-evm inline-flex items-center gap-2 hover:text-fg"
+                  :href="evmAddressUrl(n.chainId, r.pair.tokenAddress) || undefined"
+                  target="_blank"
+                  rel="noopener"
+                  :title="r.pair.tokenAddress"
+                  ><TokenIcon :symbol="r.evm?.symbol" :chain="n.name" :size="24" />{{ r.evm?.symbol ?? '?' }}</a
+                >
               </td>
-              <td>
+              <td class="evm-col">
                 <a
                   class="inline-flex items-center gap-2 hover:text-fg"
                   :href="evmAddressUrl(n.chainId, r.pair.tokenAddress) || undefined"
@@ -249,16 +271,22 @@ const momentumTime = computed(() => bridge.orch?.estimatedMomentumTime || 10)
                   ><TokenIcon :symbol="r.evm?.symbol" :chain="n.name" :size="24" />{{ r.evm?.symbol ?? '?' }}</a
                 >
               </td>
-              <td class="num mono">{{ r.pair.feePercentage / 100 }}%</td>
-              <td class="num"><Amount :value="r.pair.minAmount" :decimals="r.zts?.decimals ?? 8" /></td>
-              <td class="num mono text-soft">{{ r.pair.redeemDelay }} m · {{ r.evmInfo?.redeemDelay ?? '–' }} b</td>
-              <td>
+              <td data-label="Fee" class="num mono">{{ r.pair.feePercentage / 100 }}%</td>
+              <td data-label="Min" class="num"><Amount :value="r.pair.minAmount" :decimals="r.zts?.decimals ?? 8" /></td>
+              <td data-label="Delay" class="num mono text-soft" :title="delays(r.pair.redeemDelay, r.evmInfo?.redeemDelay, bridge.evmNetworks[n.chainId]?.blockTime).title">
+                {{ delays(r.pair.redeemDelay, r.evmInfo?.redeemDelay, bridge.evmNetworks[n.chainId]?.blockTime).text }}
+              </td>
+              <td data-label="Open">
                 <span class="inline-flex gap-1">
-                  <span class="chip" :class="r.canWrap ? 'chip-ok' : 'chip-dim'" :title="'Zenon to ' + n.name">Out</span>
-                  <span class="chip" :class="r.canUnwrap ? 'chip-ok' : 'chip-dim'" :title="n.name + ' to Zenon'">In</span>
+                  <span class="chip" :class="r.canWrap ? 'chip-ok' : 'chip-dim'" :title="'Zenon to ' + n.name + (r.canWrap ? ': open' : ': closed')">
+                    <ArrowUpRight :size="12" />Out<Check v-if="r.canWrap" :size="12" /><Minus v-else :size="12" />
+                  </span>
+                  <span class="chip" :class="r.canUnwrap ? 'chip-ok' : 'chip-dim'" :title="n.name + ' to Zenon' + (r.canUnwrap ? ': open' : ': closed')">
+                    <ArrowDownLeft :size="12" />In<Check v-if="r.canUnwrap" :size="12" /><Minus v-else :size="12" />
+                  </span>
                 </span>
               </td>
-              <td class="num">
+              <td data-label="Fees held" class="num">
                 <Amount
                   v-if="fees[r.pair.tokenStandard] !== undefined && r.pair.feePercentage"
                   :value="fees[r.pair.tokenStandard]"
@@ -273,9 +301,10 @@ const momentumTime = computed(() => bridge.orch?.estimatedMomentumTime || 10)
       </div>
     </div>
 
-    <div class="grid gap-3 md:grid-cols-2">
-      <div class="panel p-4 md:p-5">
-        <h2 class="mb-3 text-lg font-semibold">Configuration</h2>
+    <!-- The contract's settings: read rarely, so folded. -->
+    <div class="grid items-start gap-3 md:grid-cols-2">
+      <details class="panel fold">
+        <summary><h2 class="text-lg font-semibold">Configuration</h2><ChevronDown :size="16" class="chev" /></summary>
         <dl class="kv">
           <div><dt>Finality</dt><dd class="mono">{{ bridge.orch?.confirmationsToFinality ?? '–' }} momentums</dd></div>
           <div><dt>Signing pool</dt><dd class="mono">{{ bridge.orch?.windowSize ?? '–' }}</dd></div>
@@ -283,15 +312,18 @@ const momentumTime = computed(() => bridge.orch?.estimatedMomentumTime || 10)
           <div><dt>Guardians</dt><dd class="mono">{{ security?.guardians.length ?? '–' }}</dd></div>
           <div>
             <dt>Admin delay</dt>
-            <dd class="mono">{{ security ? `${security.administratorDelay} m · ${duration(security.administratorDelay * momentumTime)}` : '–' }}</dd>
+            <dd class="mono" :title="security ? security.administratorDelay + ' momentums' : undefined">{{ security ? duration(security.administratorDelay * momentumTime) : '–' }}</dd>
           </div>
-          <div><dt>Soft delay</dt><dd class="mono">{{ security ? `${security.softDelay} m · ${duration(security.softDelay * momentumTime)}` : '–' }}</dd></div>
+          <div>
+            <dt>Soft delay</dt>
+            <dd class="mono" :title="security ? security.softDelay + ' momentums' : undefined">{{ security ? duration(security.softDelay * momentumTime) : '–' }}</dd>
+          </div>
           <div>
             <dt>Administrator</dt>
             <dd><Address v-if="bridge.info" :value="bridge.info.administrator" :href="config.zenonExplorerAddress(bridge.info.administrator)" /></dd>
           </div>
           <div>
-            <dt>Affiliate</dt>
+            <dt>Referral</dt>
             <dd>
               <span v-if="!affiliate.length" class="text-dim">Off</span>
               <span v-for="[id, a] in affiliate" :key="id" class="block text-right">
@@ -300,14 +332,18 @@ const momentumTime = computed(() => bridge.orch?.estimatedMomentumTime || 10)
             </dd>
           </div>
         </dl>
-      </div>
-      <div class="panel p-4 md:p-5">
-        <h2 class="mb-3 text-lg font-semibold">Liquidity program</h2>
+      </details>
+      <details class="panel fold">
+        <summary>
+          <h2 class="text-lg font-semibold">Liquidity program</h2>
+          <StatusChip
+            v-if="liquidity"
+            :tone="liquidity.isHalted ? 'danger' : liquidity.znnReward || liquidity.qsrReward ? 'ok' : 'dim'"
+            :label="liquidity.isHalted ? 'Halted' : liquidity.znnReward || liquidity.qsrReward ? 'Paying' : 'No rewards'"
+          />
+          <ChevronDown :size="16" class="chev" />
+        </summary>
         <dl v-if="liquidity" class="kv">
-          <div>
-            <dt>State</dt>
-            <dd><StatusChip :tone="liquidity.isHalted ? 'danger' : liquidity.znnReward || liquidity.qsrReward ? 'ok' : 'dim'" :label="liquidity.isHalted ? 'Halted' : liquidity.znnReward || liquidity.qsrReward ? 'Paying' : 'No rewards'" /></dd>
-          </div>
           <div><dt>ZNN per epoch</dt><dd><Amount :value="liquidity.znnReward" :decimals="8" /></dd></div>
           <div><dt>QSR per epoch</dt><dd><Amount :value="liquidity.qsrReward" :decimals="8" /></dd></div>
           <div v-for="t in liquidity.tokenTuples" :key="t.tokenStandard">
@@ -316,10 +352,10 @@ const momentumTime = computed(() => bridge.orch?.estimatedMomentumTime || 10)
           </div>
         </dl>
         <div v-else class="skeleton h-32" />
-      </div>
+      </details>
     </div>
 
-    <p class="text-sm text-dim">Read from <span class="mono">{{ hostOf(node.url) }}</span> and each network's bridge contract.</p>
+    <p class="text-sm text-dim">Read from <span class="mono">{{ hostOf(node.url) }}</span> and each bridge contract.</p>
   </section>
 </template>
 
@@ -388,11 +424,70 @@ const momentumTime = computed(() => bridge.orch?.estimatedMomentumTime || 10)
 .data .num {
   text-align: right;
 }
+.data .chip {
+  gap: 3px;
+}
 .data tbody tr {
   transition: background 150ms var(--ease);
 }
 .data tbody tr:hover {
   background: var(--raised);
+}
+/* On a wide table the EVM token has its own column; on a phone it rides
+   beside the Zenon token as a pair. */
+.pair-arrow,
+.pair-evm {
+  display: none;
+}
+/* A phone gets each row as a card: the same cells, labelled, two to a line,
+   so nothing scrolls sideways and nothing is dropped. */
+@media (max-width: 639px) {
+  .data thead {
+    display: none;
+  }
+  .data,
+  .data tbody {
+    display: block;
+  }
+  .data tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 16px;
+    padding: 12px 16px;
+    border-top: 1px solid var(--line);
+  }
+  .data td {
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    white-space: normal;
+  }
+  .data .num {
+    text-align: left;
+  }
+  .data td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 2px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--dim);
+  }
+  .data td.lead {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .data .evm-col {
+    display: none;
+  }
+  .pair-arrow,
+  .pair-evm {
+    display: inline-flex;
+  }
 }
 .state-dot {
   width: 8px;
@@ -406,6 +501,33 @@ const momentumTime = computed(() => bridge.orch?.estimatedMomentumTime || 10)
 }
 .state-dot.off {
   background: var(--line-strong);
+}
+.fold {
+  padding: 16px 20px;
+}
+.fold summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  list-style: none;
+  cursor: pointer;
+}
+.fold summary::-webkit-details-marker {
+  display: none;
+}
+.fold summary h2 {
+  flex: 1;
+}
+.fold .chev {
+  color: var(--dim);
+  transition: transform 260ms var(--spring);
+}
+.fold[open] .chev {
+  transform: rotate(180deg);
+}
+.fold[open] summary {
+  margin-bottom: 12px;
 }
 .kv {
   display: grid;

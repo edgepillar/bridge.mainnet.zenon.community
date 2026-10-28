@@ -11,7 +11,7 @@ import Amount from '../components/Amount.vue'
 import StatusChip from '../components/StatusChip.vue'
 import Terms from '../components/Terms.vue'
 import { bridge, routeByZts, nodeContext, READ_TTL_MS } from '../state/bridge.ts'
-import { api, node, syrius, sendBlock, connectSyrius, onBuildChain, wrongZenonChain, nodeIsCurrent } from '../state/zenon.ts'
+import { api, node, syrius, sendBlock, connectSyrius, checkSyriusNetwork, onBuildChain, wrongZenonChain, nodeIsCurrent } from '../state/zenon.ts'
 import { evm, ensureChain, walletForReads } from '../state/evm.ts'
 import { go, bridgePrefill } from '../state/router.ts'
 import { accepted } from '../state/ack.ts'
@@ -31,7 +31,6 @@ import { config, evmChain, evmTxUrl } from '../config.ts'
 import { allPages } from '../core/paging.ts'
 import { operations, unresolvedOperation } from '../state/operations.ts'
 import { submitTransaction, successfulReceipt, transactionPayload } from '../evm/transactions.ts'
-import OperationRecovery from '../components/OperationRecovery.vue'
 
 let mounted = true
 const refreshTimers = new Set<ReturnType<typeof setTimeout>>()
@@ -104,7 +103,7 @@ async function loadPool() {
     poolReadAt.value = Date.now()
     poolError.value = ''
   } catch {
-    if (current()) poolError.value = 'Pool data is unavailable. Refresh before adding liquidity.'
+    if (current()) poolError.value = 'Pool unavailable'
   }
 }
 
@@ -123,8 +122,7 @@ const needsApprove = computed(() => !!balances.value && !!znnAmount.value && bal
 const addBlocker = computed(() => {
   if (!evm.account) return 'Connect EVM wallet'
   if (evm.chainId !== poolChainId.value) return `Switch to ${evmChain(poolChainId.value).name}`
-  if (operations.error) return 'Operation storage unavailable'
-  if (unresolvedOperation('evm', poolChainId.value, evm.account)) return 'Reconcile original operation'
+  if (operations.error || unresolvedOperation('evm', poolChainId.value, evm.account)) return 'Check Activity first'
   if (!pool.value || !wznn.value || !bridge.loaded || !balances.value || !reserves.value || !poolReadAt.value || poolError.value || Date.now() - poolReadAt.value > READ_TTL_MS) return 'Pool data unavailable'
   if (!znnAmount.value) return 'Enter an amount'
   if (!ethAmount.value || !lpOut.value) return 'Amount too small'
@@ -143,7 +141,7 @@ async function addLiquidity() {
   const account = evm.account!, provider = evm.selected!.provider, chainId = poolChainId.value, context = poolContext()
   const amount = znnAmount.value!, ether = ethAmount.value, keep = BigInt(Math.round((100 - slippage.value) * 100)), approval = needsApprove.value
   const guard = () => {
-    if (!mounted || context !== poolContext() || provider !== evm.selected?.provider || !bridge.loaded || Date.now() - poolReadAt.value > READ_TTL_MS) throw new Error('Pool or wallet changed before submission')
+    if (!mounted || context !== poolContext() || provider !== evm.selected?.provider || !bridge.loaded || Date.now() - poolReadAt.value > READ_TTL_MS) throw new Error('Changed before sending. Try again.')
   }
   adding.value = true
   try {
@@ -158,7 +156,7 @@ async function addLiquidity() {
       toast('Approval sent', 'wait')
       await successfulReceipt(reader, chainId, h)
       const allowance = await reader.readContract({ address: token, abi: erc20Abi, functionName: 'allowance', args: [account, p.router] })
-      if (allowance < amount) throw new Error('Approval receipt succeeded but allowance is insufficient')
+      if (allowance < amount) throw new Error('Approval too low. Try again.')
     }
     // Deadline: latest block time + 90 s, as the original.
     const block = await reader.getBlock()
@@ -177,8 +175,8 @@ async function addLiquidity() {
     toast('Liquidity sent', 'wait', url ? { href: url, label: 'View' } : undefined)
     await successfulReceipt(reader, chainId, hash)
     const lpAfter = await reader.readContract({ address: p.pair, abi: pairAbi, functionName: 'balanceOf', args: [account] })
-    if (lpAfter <= lpBefore) throw new Error('Receipt succeeded but LP balance increase is not established. Check the original transaction.')
-    toast('LP tokens received. Bridge them to Zenon next.', 'ok')
+    if (lpAfter <= lpBefore) throw new Error('LP not received. Check the transaction.')
+    toast('LP received. Bridge it next.', 'ok')
     if (mounted && context === poolContext()) { znnText.value = ''; await loadPool() }
   } catch (err) {
     toastError(err)
@@ -231,7 +229,7 @@ async function loadZenon() {
     zenonReadAt.value = Date.now()
     zenonError.value = ''
   } catch {
-    if (current()) zenonError.value = 'Liquidity program data is unavailable. Refresh before signing.'
+    if (current()) zenonError.value = 'Program unavailable'
   }
 }
 
@@ -239,31 +237,34 @@ const tuple = computed(() => info.value?.tokenTuples.find((t) => t.tokenStandard
 const lpToken = (zts: string) => bridge.routes.find((r) => r.pair.tokenStandard === zts)?.zts
 const stakeDecimals = computed(() => lpToken(stakeZts.value)?.decimals ?? 18)
 const stakeAmount = computed(() => parseUnits(stakeText.value, stakeDecimals.value))
-const stakeBalance = computed(() => lpBalances.value[stakeZts.value] ?? 0n)
+// Unread is a dash, not a zero: a zero says the wallet holds none.
+const stakeBalance = computed(() => lpBalances.value[stakeZts.value] ?? (zenonReadAt.value ? 0n : null))
 const stakeBlocker = computed(() => {
   if (!syrius.address) return 'Connect Syrius'
+  if (syrius.app && syrius.chainId === null) return 'Check network'
   if (wrongZenonChain()) return 'Select the same Zenon network'
-  if (operations.error || unresolvedOperation('zenon', node.chainId, syrius.address)) return 'Reconcile original operation'
+  if (operations.error || unresolvedOperation('zenon', node.chainId, syrius.address)) return 'Check Activity first'
   if (!info.value || !tuple.value || !lpToken(stakeZts.value) || !zenonReadAt.value || zenonError.value || !nodeIsCurrent() || Date.now() - zenonReadAt.value > READ_TTL_MS) return 'Program data unavailable'
   if (info.value?.isHalted) return 'Program halted'
-  if (!info.value.znnReward && !info.value.qsrReward) return 'Rewards are currently zero'
+  if (!info.value.znnReward && !info.value.qsrReward) return 'No rewards now'
   if (!Number.isInteger(months.value) || months.value < 1 || months.value > 12) return 'Invalid lock duration'
   if (!stakeAmount.value) return 'Enter an amount'
   if (tuple.value && stakeAmount.value < tuple.value.minAmount) return 'Below minimum'
-  if (stakeAmount.value > stakeBalance.value) return 'Not enough LP'
+  if (stakeAmount.value > (stakeBalance.value ?? 0n)) return 'Not enough LP'
   return ''
 })
 
 async function stake() {
   if (stakeBlocker.value === 'Connect Syrius') return void connectSyrius().catch(toastError)
+  if (stakeBlocker.value === 'Check network') return checkSyriusNetwork()
   if (stakeBlocker.value) return
   const spec = liquidityStakeBlock(months.value, stakeZts.value, stakeAmount.value!), context = zenonContext()
   const program = () => JSON.stringify(info.value, (_key, value) => typeof value === 'bigint' ? value.toString() : value)
   const selectedProgram = program()
   busy.value.stake = true
   try {
-    const hash = await sendBlock(spec, () => { if (context !== zenonContext() || program() !== selectedProgram || !zenonActionReady(true) || !info.value || info.value.isHalted || !info.value.znnReward && !info.value.qsrReward) throw new Error('Staking context changed before submission') })
-    toast('Stake submitted; awaiting confirmation', 'wait', { href: config.zenonExplorerTx(hash), label: 'View' })
+    const hash = await sendBlock(spec, () => { if (context !== zenonContext() || program() !== selectedProgram || !zenonActionReady(true) || !info.value || info.value.isHalted || !info.value.znnReward && !info.value.qsrReward) throw new Error('Changed before sending. Try again.') })
+    toast('Stake sent', 'wait', { href: config.zenonExplorerTx(hash), label: 'View' })
     if (mounted && context === zenonContext()) { stakeText.value = ''; refreshLater() }
   } catch (err) {
     toastError(err)
@@ -278,8 +279,8 @@ async function cancel(e: StakeEntry) {
   const context = zenonContext()
   busy.value[e.id] = true
   try {
-    const hash = await sendBlock(spec, () => { if (context !== zenonContext() || !zenonActionReady(true) || node.timestamp < e.expirationTime) throw new Error('Stake cancellation context changed before submission') })
-    toast('Revoke submitted; awaiting confirmation', 'wait', { href: config.zenonExplorerTx(hash), label: 'View' })
+    const hash = await sendBlock(spec, () => { if (context !== zenonContext() || !zenonActionReady(true) || node.timestamp < e.expirationTime) throw new Error('Changed before sending. Try again.') })
+    toast('Revoke sent', 'wait', { href: config.zenonExplorerTx(hash), label: 'View' })
     refreshLater()
   } catch (err) {
     toastError(err)
@@ -293,8 +294,8 @@ async function collect() {
   busy.value.collect = true
   const context = zenonContext()
   try {
-    const hash = await sendBlock(collectRewardBlock(), () => { if (context !== zenonContext() || !zenonActionReady(true)) throw new Error('Reward collection context changed before submission') })
-    toast('Collect submitted; awaiting confirmation', 'wait', { href: config.zenonExplorerTx(hash), label: 'View' })
+    const hash = await sendBlock(collectRewardBlock(), () => { if (context !== zenonContext() || !zenonActionReady(true)) throw new Error('Changed before sending. Try again.') })
+    toast('Collect sent', 'wait', { href: config.zenonExplorerTx(hash), label: 'View' })
     refreshLater()
   } catch (err) {
     toastError(err)
@@ -329,11 +330,7 @@ watch(
 
 <template>
   <section class="rise grid grid-cols-1 gap-5">
-    <OperationRecovery />
-    <div>
-      <h1 class="text-2xl font-semibold">Liquidity</h1>
-      <p class="mt-1 text-soft">Add to the wZNN pool, bridge the LP token to Zenon, stake it for rewards.</p>
-    </div>
+    <h1 class="text-2xl font-semibold">Liquidity</h1>
 
     <div class="grid gap-4 md:grid-cols-3">
       <!-- Step 1 -->
@@ -350,7 +347,7 @@ watch(
             <span class="inline-flex items-center gap-2.5"><TokenIcon symbol="wZNN" :chain="evmChain(poolChainId).name" :size="28" />wZNN</span>
           </div>
           <div class="text-xs text-dim">
-            Balance <Amount :value="balances?.znn ?? 0n" :decimals="8" />
+            Balance <Amount :value="balances?.znn ?? null" :decimals="8" />
             <button class="ml-1 text-ok" :disabled="adding || !poolReadAt || !balances" @click="znnText = unitsToInput(balances?.znn ?? 0n, 8)">Max</button>
           </div>
         </div>
@@ -400,21 +397,21 @@ watch(
           </div>
           <div class="text-xs text-dim">
             Balance <Amount :value="stakeBalance" :decimals="stakeDecimals" :max="10" />
-            <button class="ml-1 text-ok" :disabled="busy.stake || !zenonReadAt" @click="stakeText = unitsToInput(stakeBalance, stakeDecimals)">Max</button>
+            <button class="ml-1 text-ok" :disabled="busy.stake || stakeBalance === null" @click="stakeText = unitsToInput(stakeBalance ?? 0n, stakeDecimals)">Max</button>
           </div>
         </div>
         <div>
           <div class="mb-1 flex justify-between text-sm"><span class="text-dim">Lock</span><span class="mono">{{ months }} mo · {{ months }}x</span></div>
           <input v-model.number="months" :disabled="busy.stake" type="range" min="1" max="12" step="1" class="w-full accent-[var(--znn)]" aria-label="Months" />
         </div>
-        <button class="btn btn-plasma btn-block" :disabled="busy.stake || (!!stakeBlocker && stakeBlocker !== 'Connect Syrius')" @click="guarded(stake)">
+        <button class="btn btn-plasma btn-block" :disabled="busy.stake || (!!stakeBlocker && stakeBlocker !== 'Connect Syrius' && stakeBlocker !== 'Check network')" @click="guarded(stake)">
           <Loader2 v-if="busy.stake" :size="15" class="spin" /><Lock v-else :size="15" />
           {{ stakeBlocker || 'Stake' }}
         </button>
         <div v-if="info" class="text-xs text-dim">
           Rewards per epoch: <Amount :value="info.znnReward" :decimals="8" symbol="ZNN" />, <Amount :value="info.qsrReward" :decimals="8" symbol="QSR" />
         </div>
-        <p v-if="info && !info.znnReward && !info.qsrReward" class="text-sm text-warn">Rewards are currently zero. New stakes are paused in this interface.</p>
+
         <p v-if="zenonError" class="text-sm text-danger">{{ zenonError }}</p>
       </div>
     </div>
@@ -430,8 +427,8 @@ watch(
           <Loader2 v-if="busy.collect" :size="14" class="spin" /><Coins v-else :size="14" />Collect
         </button>
       </div>
-      <p v-if="!syrius.address" class="text-soft">Connect Syrius to see your stakes.</p>
-      <p v-else-if="zenonError || !zenonReadAt" class="text-soft">Stake history is unavailable or being refreshed.</p>
+      <p v-if="!syrius.address" class="text-soft">Connect Syrius</p>
+      <p v-else-if="zenonError || !zenonReadAt" class="text-soft">Stakes unavailable</p>
       <p v-else-if="!stakes.length" class="text-soft">None yet</p>
       <div v-else class="grid gap-2">
         <div v-for="e in stakes" :key="e.id" class="flex flex-wrap items-center gap-3 border-t border-line pt-2 text-sm first:border-0 first:pt-0">

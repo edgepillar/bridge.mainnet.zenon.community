@@ -17,6 +17,9 @@ describe('user messages', () => {
     expect(userMessage(Object.assign(new Error('declined in Syrius'), { declined: true }))).toEqual(declined)
     expect(userMessage(new Error('MetaMask Tx Signature: User denied transaction signature.'))).toEqual(declined)
   })
+  it('says a request handed to the Syrius app is waiting there, quietly', () => {
+    expect(userMessage(Object.assign(new Error('Approve in Syrius'), { name: 'AppHandoffError' }))).toEqual({ text: 'Approve in Syrius', declined: true })
+  })
   it('names what the user can do about a wallet state', () => {
     expect(userMessage({ code: -32005, message: 'Syrius would not open a window: it holds a site off for 30 s…' }).text).toBe('Syrius is busy. Try again in 30 seconds.')
     expect(userMessage({ code: -32002, message: 'Request of type wallet_switchEthereumChain already pending' }).text).toBe('Open your wallet to continue')

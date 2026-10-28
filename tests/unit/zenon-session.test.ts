@@ -126,7 +126,7 @@ describe('selected Zenon node and wallet session authority', () => {
   })
   it('requires explicit wallet-node confirmation and clears the saved choice when default is selected', async () => {
     const z = await connected(); await z.requestWalletNode()
-    expect(z.node.source).toBe('default'); expect(z.walletNode.pending).toEqual({ url: walletUrl, chainId: 1 })
+    expect(z.node.source).toBe('default'); expect(z.walletNode.pending).toEqual({ url: walletUrl, chainId: 1, kind: 'wallet' })
     z.confirmWalletNode(); expect(z.node.source).toBe('wallet'); expect(localStorage.getItem('bridge.node')).toContain(walletUrl)
     z.useDefaultNode(); expect(z.node.source).toBe('default'); expect(localStorage.getItem('bridge.node')).toBeNull()
   })

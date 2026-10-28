@@ -74,6 +74,26 @@ The choice is stored with the chain identifier it was confirmed for. It is
 restored on a later visit only while Syrius still names that node and the node
 is still on that chain; otherwise the page goes back to the default and says so.
 
+### A node the user adds
+
+The Node menu also takes an address. It goes through the same confirmation: the
+page asks the node for its frontier momentum, names the network from the chain
+identifier and waits for the user to accept it. The address must be `wss://`,
+or `ws://` to `localhost` or `127.0.0.1`: a plain `ws://` to another host would
+let anyone on the path change what the page reads, and the CSP refuses it
+anyway. `https://` and `http://` are rewritten to `wss://` and `ws://`, a bare
+host becomes `wss://`, and an address with credentials, a query or a fragment
+is refused.
+
+Up to eight confirmed nodes are listed (`bridge.nodes`, each with its chain
+identifier). Picking a listed node that still reports the same chain switches
+at once; a node now on another chain is confirmed again. The selected node
+(`bridge.node.custom`) is restored on load when it answers on the same chain.
+If it answers on another chain the selection is dropped and the page says so;
+if it does not answer, the page reads from the default for this visit and keeps
+the selection for the next. The user's node and the Syrius node exclude each
+other, and "default" in the menu clears both.
+
 
 ## Any chain
 
@@ -101,7 +121,9 @@ is derived from the chain:
 
 The verdict, in order: halted, key generation, stalled (6 h), delayed (1 h),
 online (a signature in the last 24 h), idle. Halted, key generation and
-stalled show the red banner on every page. The Advanced "Send anyway" switch
+stalled show the red banner on every page but Status, in the same words the
+action button uses: "Bridge is halted", "New key in progress", "Bridge is
+stalled". The form carries no second note. The Advanced "Send anyway" switch
 overrides only a health warning; halted contracts and configuration/identity
 guards still block writes. Thresholds are in `src/core/orchestrators.ts`.
 

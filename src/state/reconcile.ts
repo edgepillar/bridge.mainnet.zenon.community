@@ -7,8 +7,8 @@ import { updateOperation, validHash, type Operation } from './operations.ts'
 
 /** Exact original hash only. No address-history search, nonce discovery or replacement signing. */
 export async function reconcileZenon(a: ZenonApi, operation: Operation, hash = operation.hash, current: () => boolean = () => true): Promise<boolean> {
-  if (operation.source !== 'zenon' || operation.state === 'mismatch') throw new Error('Operation requires manual evidence review')
-  if (!validHash('zenon', hash)) throw new Error('Provide the exact hash from the original wallet operation')
+  if (operation.source !== 'zenon' || operation.state === 'mismatch') throw new Error('Wallet sent different details. Contact wallet support.')
+  if (!validHash('zenon', hash)) throw new Error('Paste the hash from your wallet')
   const block = await a.c.callOrNull<Parameters<typeof computeBlockHash>[0] & { hash: string; signature: string; publicKey: string; confirmationDetail?: { numConfirmations: number } }>('ledger.getAccountBlockByHash', [hash])
   if (!block || !current()) return false
   const payload = JSON.parse(operation.payload) as Record<string, unknown>
@@ -16,22 +16,22 @@ export async function reconcileZenon(a: ZenonApi, operation: Operation, hash = o
   if (block.hash.toLowerCase() !== hash.toLowerCase() || toHex(computeBlockHash(block)) !== hash.toLowerCase() || block.chainIdentifier !== operation.chainId ||
     block.address !== operation.account || formatAddress(addressFromPublicKey(publicKey)) !== operation.account ||
     !ed25519.verify(fromBase64(block.signature), fromHex(hash), publicKey) ||
-    Object.entries(payload).some(([key, value]) => String(block[key as keyof typeof block]) !== String(value))) throw new Error('Transaction does not match the original operation')
+    Object.entries(payload).some(([key, value]) => String(block[key as keyof typeof block]) !== String(value))) throw new Error('That transaction is a different send')
   if (!current()) return false
   updateOperation(operation.id, { hash, state: (block.confirmationDetail?.numConfirmations ?? 0) > 0 ? 'confirmed' : 'submitted' })
   return (block.confirmationDetail?.numConfirmations ?? 0) > 0
 }
 
 export async function reconcileEvm(reader: PublicClient, operation: Operation, hash = operation.hash, current: () => boolean = () => true, confirmations = 2): Promise<boolean> {
-  if (operation.source !== 'evm' || operation.state === 'mismatch') throw new Error('Operation requires manual evidence review')
-  if (!validHash('evm', hash)) throw new Error('Provide the exact hash from the original wallet operation')
+  if (operation.source !== 'evm' || operation.state === 'mismatch') throw new Error('Wallet sent different details. Contact wallet support.')
+  if (!validHash('evm', hash)) throw new Error('Paste the hash from your wallet')
   const [chainId, transaction, receipt] = await Promise.all([reader.getChainId(), reader.getTransaction({ hash: hash as `0x${string}` }), reader.getTransactionReceipt({ hash: hash as `0x${string}` })])
   if (!current()) return false
   const payload = JSON.parse(operation.payload) as { to: string; data: string; value: string }
   if (chainId !== operation.chainId || transaction.hash.toLowerCase() !== hash.toLowerCase() || transaction.from.toLowerCase() !== operation.account.toLowerCase() ||
     transaction.to?.toLowerCase() !== payload.to || transaction.input.toLowerCase() !== payload.data || transaction.value.toString() !== payload.value || receipt.transactionHash.toLowerCase() !== hash.toLowerCase() ||
     transaction.blockHash?.toLowerCase() !== receipt.blockHash.toLowerCase() || transaction.blockNumber !== receipt.blockNumber ||
-    receipt.from.toLowerCase() !== operation.account.toLowerCase() || receipt.to?.toLowerCase() !== payload.to) throw new Error('Transaction does not match the original operation')
+    receipt.from.toLowerCase() !== operation.account.toLowerCase() || receipt.to?.toLowerCase() !== payload.to) throw new Error('That transaction is a different send')
   const canonical = await reader.getBlock({ blockNumber: receipt.blockNumber })
   const height = await reader.getBlockNumber()
   if (!current() || canonical.hash?.toLowerCase() !== receipt.blockHash.toLowerCase() || height < receipt.blockNumber + BigInt(Math.max(1, confirmations) - 1)) return false

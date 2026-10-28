@@ -173,7 +173,7 @@ check against a mainnet signature.
 | File | Covers |
 |---|---|
 | `bridge.e2e.test.ts` | Wrap and both EVM redeems, unwrap through a referral with both Zenon redeems, exact balances on both chains, every status the app derives on the way, and the health verdict going stalled and back |
-| `ui.e2e.test.ts` | The page in headless Chrome with a mock Syrius provider and a mock EIP-6963 wallet: connect, terms, wrap, redeem twice from Activity, approve and unwrap, redeem on Zenon, Stats online, no console errors, no overflow |
+| `ui.e2e.test.ts` | The page in headless Chrome with a mock Syrius provider and a mock EIP-6963 wallet: connect, terms, wrap, redeem twice from Activity, approve and unwrap, redeem on Zenon, Status online, no console errors, no overflow |
 | `built.e2e.test.ts` | The devnet production bundle as served: routes, CSP, no external requests, mobile layout, a WebSocket frontier on chain 322, cold starts and a reconnect |
 
 The protocol test builds every block and transaction with the app's own
@@ -246,5 +246,7 @@ Qualification retains each Node matrix job's mainnet `dist` as a separate artifa
   minutes each.
 - The liquidity contract and the Uniswap pool are not in the lab; full economic flows
   remain separate acceptance work; fixture and ABI checks cannot prove them.
-- The real Syrius extension and real EVM wallets are not driven. The mocks
-  follow their provider interfaces.
+- These suites use a mock Syrius and a mock EVM wallet. Real Syrius releases,
+  the phone app's web build and the Node menu are driven against the same lab
+  by `e2e/syrius/`; versions and results are in [SYRIUS](SYRIUS.md). Real EVM
+  wallets are not driven.

@@ -3,7 +3,7 @@
 // Redeem is open to anyone: on EVM the tokens go to the request's recipient
 // whoever sends the call, and on Zenon the same holds for `Redeem`.
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { ArrowRight, RefreshCw, Search, X, Loader2 } from '@lucide/vue'
+import { ArrowRight, RefreshCw, Eye, X, Loader2 } from '@lucide/vue'
 import TokenIcon from '../components/TokenIcon.vue'
 import Modal from '../components/Modal.vue'
 import Amount from '../components/Amount.vue'
@@ -13,13 +13,14 @@ import OperationRecovery from '../components/OperationRecovery.vue'
 import { activity, refreshActivity, setWatched, type Item } from '../state/activity.ts'
 import { bridge, bridgeDown, nodeContext, routeByZts } from '../state/bridge.ts'
 import { evm, ensureChain } from '../state/evm.ts'
-import { syrius, sendBlock, connectSyrius } from '../state/zenon.ts'
+import { syrius, sendBlock, connectSyrius, checkSyriusNetwork } from '../state/zenon.ts'
 import { toast, toastError } from '../state/toasts.ts'
 import { userMessage } from '../core/errors.ts'
 import { readClient, writeClient } from '../evm/client.ts'
 import { bridgeAbi } from '../evm/abi.ts'
 import { redeemBlock } from '../znn/api.ts'
 import { isAddress } from '../znn/primitives.ts'
+import { isEvmRecipient } from '../core/recipient.ts'
 import { evmSignature, wrapStateFromRevert } from '../core/status.ts'
 import { clock, ago } from '../core/format.ts'
 import { config, evmChain, evmTxUrl, evmAddressUrl } from '../config.ts'
@@ -60,7 +61,9 @@ const left = (i: Item) => (i.status.eta ? activity.builtAt + i.status.eta - now.
 
 const trackOpen = ref(false)
 const watchText = ref('')
-const watchValid = computed(() => isAddress(watchText.value.trim()) || /^0x[0-9a-fA-F]{40}$/.test(watchText.value.trim()))
+// The same test the store applies, so a mis-cased 0x address is refused here
+// and not dropped silently on save.
+const watchValid = computed(() => isAddress(watchText.value.trim()) || isEvmRecipient(watchText.value.trim()))
 function addWatch() {
   if (!watchValid.value) return
   setWatched([...activity.watched, watchText.value.trim()])
@@ -120,6 +123,7 @@ async function redeemUnwrap(i: Item) {
       return toastError(err)
     }
   }
+  if (syrius.app && syrius.chainId === null) return checkSyriusNetwork()
   activity.busy[i.key] = true
   try {
     const guard = () => { if (i.context !== activity.context || !freshHistory()) throw new Error('Refresh this request on its original network before redeeming') }
@@ -156,28 +160,29 @@ const connectedNothing = computed(() => !evm.account && !syrius.address && !acti
 <template>
   <section class="rise grid grid-cols-1 gap-5">
     <OperationRecovery />
-    <p v-if="activity.error || activity.storageError" class="note warn" role="status">{{ activity.error || activity.storageError }}. Previously observed rows may be stale.</p>
+    <p v-if="activity.error || activity.storageError" class="note warn" role="status">{{ activity.error || activity.storageError }}</p>
     <div class="flex flex-wrap items-center gap-3">
       <h1 class="text-2xl font-semibold">Activity</h1>
       <button class="btn btn-ghost btn-sm" :disabled="activity.loading" aria-label="Refresh" @click="refreshActivity">
         <RefreshCw :size="15" :class="{ spin: activity.loading }" />
       </button>
       <div class="flex-1" />
-      <button class="btn btn-sm" data-testid="track-open" @click="trackOpen = true">
-        <Search :size="14" />Track<span v-if="activity.watched.length" class="mono text-dim">{{ activity.watched.length }}</span>
+      <button class="btn btn-sm" data-testid="track-open" aria-label="Watch an address" @click="trackOpen = true">
+        <Eye :size="14" />Watch<span v-if="activity.watched.length" class="mono text-dim">{{ activity.watched.length }}</span>
       </button>
     </div>
 
     <!-- Following an address without a wallet: wanted rarely, so one tap away. -->
-    <Modal :open="trackOpen" title="Track an address" @close="trackOpen = false">
+    <Modal :open="trackOpen" title="Watch an address" @close="trackOpen = false">
       <form class="flex gap-2" @submit.prevent="addWatch">
-        <input v-model="watchText" class="field mono text-sm" placeholder="z1… or 0x…" aria-label="Track an address" spellcheck="false" />
-        <button class="btn" :disabled="!watchValid">Track</button>
+        <input v-model="watchText" class="field mono text-sm" placeholder="z1… or 0x…" aria-label="Address to watch" spellcheck="false" autocomplete="off" />
+        <button class="btn" :disabled="!watchValid">Watch</button>
       </form>
+      <p v-if="watchText.trim() && !watchValid" class="mt-2 text-sm text-danger">Not an address</p>
       <div v-if="activity.watched.length" class="mt-3 grid gap-1">
         <div v-for="a in activity.watched" :key="a" class="menu-row !px-0">
           <span class="mono min-w-0 flex-1 truncate" :title="a">{{ a.slice(0, 12) }}…{{ a.slice(-6) }}</span>
-          <button class="icon-btn !h-9 !w-9" :aria-label="'Stop tracking ' + a" @click="setWatched(activity.watched.filter((x) => x !== a))"><X :size="14" /></button>
+          <button class="icon-btn !h-9 !w-9" :aria-label="'Stop watching ' + a" @click="setWatched(activity.watched.filter((x) => x !== a))"><X :size="14" /></button>
         </div>
       </div>
     </Modal>
@@ -189,9 +194,9 @@ const connectedNothing = computed(() => !evm.account && !syrius.address && !acti
     </div>
 
     <div v-if="connectedNothing" class="panel grid place-items-center gap-2 p-10 text-center text-soft">
-      <p>Connect a wallet or track an address.</p>
+      <p>Connect a wallet or watch an address.</p>
     </div>
-    <div v-else-if="!activity.loadedOnce && activity.error" class="panel p-10 text-center text-soft">History unavailable. Retry the original network.</div>
+    <div v-else-if="!activity.loadedOnce && activity.error" class="panel p-10 text-center text-soft">History unavailable</div>
     <div v-else-if="!activity.loadedOnce" class="grid gap-2">
       <div v-for="n in 3" :key="n" class="skeleton h-[76px]" />
     </div>

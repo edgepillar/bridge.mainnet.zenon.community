@@ -40,7 +40,7 @@ describe('actual wallet publication error boundaries', () => {
     await expect(journalSubmission(intent, () => {}, () => client.sendTransaction({ to, data: '0x1234', value: 7n }))).rejects.toBeInstanceOf(TransactionExecutionError)
     expect(operations.entries[0]).toMatchObject({ ...intent, state: 'unknown' })
     const replacement = vi.fn(async () => hash)
-    await expect(journalSubmission(intent, () => {}, replacement)).rejects.toThrow('unresolved')
+    await expect(journalSubmission(intent, () => {}, replacement)).rejects.toThrow('unconfirmed')
     expect(replacement).not.toHaveBeenCalled()
     expect(provider.request.mock.calls.filter(([r]) => r.method === 'eth_sendTransaction')).toHaveLength(1)
   })
@@ -66,7 +66,7 @@ describe('actual wallet publication error boundaries', () => {
     expect(operations.entries[0].hash).toBeUndefined()
     restoreOperations()
     const replacement = vi.fn(async () => hash)
-    await expect(journalSubmission(intent, () => {}, replacement)).rejects.toThrow('unresolved')
+    await expect(journalSubmission(intent, () => {}, replacement)).rejects.toThrow('unconfirmed')
     expect(replacement).not.toHaveBeenCalled()
   })
   it('leaves cyclic or unreadable error evidence unresolved', async () => {
@@ -110,7 +110,7 @@ describe('actual wallet publication error boundaries', () => {
     const changed = JSON.parse(storage.get('bridge.operations.v1')!)
     changed[0].reportedHashes = [hash]
     storage.set('bridge.operations.v1', JSON.stringify(changed))
-    expect(() => beginOperation({ ...intent, account: '0x' + '56'.repeat(20) })).toThrow('Stored operation evidence')
+    expect(() => beginOperation({ ...intent, account: '0x' + '56'.repeat(20) })).toThrow("Saved history can't be read")
     expect(operations.entries[0].reportedHashes).toEqual([hash, other])
   })
   it('does not let another tab resolve a mismatch or adopt an arbitrary hash', async () => {
@@ -121,7 +121,7 @@ describe('actual wallet publication error boundaries', () => {
     changed[0].state = 'confirmed'; changed[0].hash = hash
     delete changed[0].reportedHashes
     storage.set('bridge.operations.v1', JSON.stringify(changed))
-    expect(() => beginOperation({ ...intent, account: '0x' + '56'.repeat(20) })).toThrow('Stored operation evidence')
+    expect(() => beginOperation({ ...intent, account: '0x' + '56'.repeat(20) })).toThrow("Saved history can't be read")
     expect(operations.entries[0]).toMatchObject({ state: 'mismatch', reportedHashes: [hash, other] })
     expect(operations.entries[0].hash).toBeUndefined()
   })

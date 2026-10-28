@@ -173,13 +173,13 @@ describe('scoped complete activity', () => {
     const { evm } = await import('../../src/state/evm.ts'); evm.account = eth as `0x${string}`
     const { activity, refreshActivity } = await import('../../src/state/activity.ts')
     await refreshActivity(); a.wrapsTo.mockRejectedValue(new Error('RPC down')); await refreshActivity()
-    expect(activity.items).toHaveLength(1); expect(activity.error).toBe('RPC down'); expect(activity.readAt).toBe(0)
+    expect(activity.items).toHaveLength(1); expect(activity.error).toBe('History unavailable'); expect(activity.readAt).toBe(0)
   })
   it('preserves malformed storage with a controlled recovery message', async () => {
     localStorage.setItem('bridge.activity.v2', '{}'); await prepare()
     const { activity, refreshActivity } = await import('../../src/state/activity.ts')
     await expect(refreshActivity()).resolves.toBeUndefined()
-    expect(activity.storageError).toContain('unavailable'); expect(localStorage.getItem('bridge.activity.v2')).toBe('{}')
+    expect(activity.storageError).toContain('unreadable'); expect(localStorage.getItem('bridge.activity.v2')).toBe('{}')
   })
 })
 

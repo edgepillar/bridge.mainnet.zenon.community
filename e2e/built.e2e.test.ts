@@ -215,9 +215,10 @@ it('retains exact locked dependency and font notice bytes in the compiled distri
 
 it('keeps compiled views within a mobile viewport with disconnected wallets',async()=>{
   await page.setViewport({width:375,height:900})
+  const headings:Record<string,string>={'':'Bridge',activity:'Activity',liquidity:'Liquidity',stats:'Status',affiliate:'Referral'}
   for(const route of ['','activity','liquidity','stats','affiliate']) {
     await page.evaluate((value)=>{location.hash='#/'+value},route)
-    await page.waitForFunction((value)=>document.querySelector('h1')?.textContent?.trim()===value,{},route?route[0].toUpperCase()+route.slice(1):'Bridge')
+    await page.waitForFunction((value)=>document.querySelector('h1')?.textContent?.trim()===value,{},headings[route])
     expect(await page.evaluate(()=>document.documentElement.scrollWidth-innerWidth)).toBe(0)
   }
   expect(errors).toEqual([]);expect(outbound).toEqual([]);expect(violations).toEqual([])
