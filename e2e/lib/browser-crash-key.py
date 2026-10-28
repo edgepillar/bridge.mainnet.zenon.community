@@ -5,6 +5,7 @@ Unknown error strings are represented by a digest, never emitted verbatim.
 The layout follows Chromium 3ff7ac5a's vendored minidump_extensions.h.
 """
 import hashlib
+import errno
 import json
 import os
 from pathlib import Path
@@ -24,6 +25,22 @@ INTERFACES = {
 METHODS = {'OnDataFrame', 'OnDropChannel', 'OnConnectionEstablished',
            'OnOpeningHandshakeStarted', 'OnFailure', 'OnReceiveResponse',
            'OnReceiveRedirect', 'OnComplete', 'OnTransferSizeUpdated'}
+FAILURES = {'FILE_BOUND','READ_BOUND','INCOMPLETE','LOCATION_BOUND','STRING_BOUND',
+            'STRING_TERMINATOR','COUNT_BOUND','ANNOTATION_RESERVED','HEADER',
+            'STREAM_BOUND','EXCEPTION_BOUND','DUPLICATE_CRASHPAD_STREAM',
+            'CRASHPAD_VERSION','DUPLICATE_MODULE','MISSING_MODULE','MODULE_VERSION',
+            'MESSAGE_COUNT','DIRECTORY','CHILD_DIRECTORY','DIRECTORY_COUNT',
+            'DUMP_COUNT','DUMP_IDENTITY','TOTAL_BOUND','DUMP_CHANGED','ARGUMENTS'}
+
+
+def failure_reason(error):
+    if isinstance(error, UnicodeError):
+        return 'UTF8_REFUSED'
+    if isinstance(error, OSError):
+        return 'IO_MISSING' if error.errno == errno.ENOENT else 'IO_PERMISSION' if error.errno in [errno.EPERM, errno.EACCES] else 'IO_REFUSED'
+    if isinstance(error, struct.error):
+        return 'STRUCTURE_REFUSED'
+    return str(error) if isinstance(error, ValueError) and str(error) in FAILURES else 'FORMAT_REFUSED'
 VALIDATION = {
     'VALIDATION_ERROR_' + name for name in [
         'MISALIGNED_OBJECT', 'ILLEGAL_MEMORY_RANGE', 'UNEXPECTED_STRUCT_HEADER',
@@ -219,8 +236,8 @@ if __name__ == '__main__':
         if len(sys.argv) != 2:
             raise ValueError('ARGUMENTS')
         value = inspect_directory(sys.argv[1])
-    except (ValueError, OSError, UnicodeError, struct.error):
-        value = {'status':'UNAVAILABLE', 'reason':'OWNED_ANNOTATION_READ_REFUSED', 'rawDumpPublished':False}
+    except (ValueError, OSError, UnicodeError, struct.error) as error:
+        value = {'status':'UNAVAILABLE', 'reason':failure_reason(error), 'rawDumpPublished':False}
         print(json.dumps(value))
         sys.exit(1)
     print(json.dumps(value))

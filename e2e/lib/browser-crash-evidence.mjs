@@ -6,6 +6,13 @@ import {spawnSync} from 'node:child_process'
 import {fileURLToPath} from 'node:url'
 
 const reader=fileURLToPath(new URL('./browser-crash-key.py',import.meta.url))
+const readerReasons=new Set(['FILE_BOUND','READ_BOUND','INCOMPLETE','LOCATION_BOUND','STRING_BOUND','STRING_TERMINATOR','COUNT_BOUND','ANNOTATION_RESERVED','HEADER','STREAM_BOUND','EXCEPTION_BOUND','DUPLICATE_CRASHPAD_STREAM','CRASHPAD_VERSION','DUPLICATE_MODULE','MISSING_MODULE','MODULE_VERSION','MESSAGE_COUNT','DIRECTORY','CHILD_DIRECTORY','DIRECTORY_COUNT','DUMP_COUNT','DUMP_IDENTITY','TOTAL_BOUND','DUMP_CHANGED','ARGUMENTS','UTF8_REFUSED','IO_MISSING','IO_PERMISSION','IO_REFUSED','STRUCTURE_REFUSED','FORMAT_REFUSED'])
+export function calibrationFailureFacts(error){
+ const text=typeof error?.message==='string'?error.message.slice(0,16384):''
+ let category='UNCLASSIFIED'
+ for(const [fragment,value] of [['Page has pending navigations','PENDING_NAVIGATION'],['Not attached to a page','NO_PAGE'],['wasn\'t found','UNSUPPORTED_COMMAND'],['Target closed','TARGET_CLOSED'],['error while loading shared libraries','MISSING_SHARED_LIBRARY'],['client.StartHandler','HANDLER_START_FAILED'],['--database is required','HANDLER_DATABASE_REQUIRED'],['Crash control deadline','CRASH_EVENT_DEADLINE'],['Crash control reader refused','ANNOTATION_READER_REFUSED'],['Calibration browser differs','BROWSER_IDENTITY_REFUSED'],['Reporter defaults differ','REPORTER_DEFAULTS_DIFFER']])if(text.includes(fragment)){category=value;break}
+ return {category,messageSha256:crypto.createHash('sha256').update(text).digest('hex'),messageTruncated:typeof error?.message==='string'&&error.message.length>16384,protocolCode:Number.isSafeInteger(error?.code)&&Math.abs(error.code)<=1_000_000?error.code:null}
+}
 export function offlineCrashOptions(puppeteer,directory){
  if(process.platform!=='linux'||process.env.GITHUB_ACTIONS!=='true'||!path.isAbsolute(directory))throw Error('Offline reporter scope refused')
  if(!puppeteer.defaultArgs().includes('--disable-crash-reporter'))throw Error('Reporter defaults differ')
@@ -24,39 +31,70 @@ export function offlineReporterIdentity(browserPath){
 export function readOfflineCrashEvidence(directory){
  const child=spawnSync('python3',['-B',reader,directory],{timeout:5000,maxBuffer:64*1024,stdio:['ignore','pipe','pipe']})
  const readerProcess={state:typeof child.status==='number'?'EXITED':child.signal?'SIGNALED':'UNKNOWN',actualExit:child.status,signal:child.signal,outputComplete:!child.error&&child.status!==null}
+ let result
  try{
-  if(child.status!==0||!readerProcess.outputComplete)throw Error('Reader process refused')
-  const result=JSON.parse(child.stdout)
+  if(!readerProcess.outputComplete)throw Error('Reader process refused')
+  result=JSON.parse(child.stdout)
+  if(child.status!==0)throw Error('Reader process refused')
   if(result.status!=='COMPLETE'||!Array.isArray(result.reports)||result.reports.length>8||result.rawDumpPublished!==false||result.otherAnnotationValuesRead!==false)throw Error('Reader output refused')
   return {...result,readerProcess}
- }catch{return {status:'UNAVAILABLE',reason:'OWNED_ANNOTATION_READ_REFUSED',rawDumpPublished:false,readerProcess}}
+ }catch{return {status:'UNAVAILABLE',reason:readerReasons.has(result?.reason)?result.reason:'OWNED_ANNOTATION_READ_REFUSED',rawDumpPublished:false,readerProcess}}
 }
 
 export async function calibrateOfflineCrashReader(puppeteer,executablePath,work){
  const directory=path.join(work,'calibration-crashes'),profile=path.join(work,'calibration-profile')
- const options=offlineCrashOptions(puppeteer,directory)
- let browser
+ let browser,phase='OPTIONS',ownedTarget,resolveCrash
+ const result={status:'FAILURE',scope:'OWNED_ABOUT_BLANK_RENDERER',phase,pageInitialized:false,pageCrashObserved:false,targetCrashObserved:false,injectedRendererCrashRequests:0,injectedRendererCrashes:0,protocolOutcome:'NOT_REQUESTED',mainBrowserAlive:false,browserCloseStatus:'NOT_STARTED',evidence:null,failure:null,rawDumpPublished:false}
  try{
+  const defaults=puppeteer.defaultArgs()
+  result.defaultCrashFlags={disableCrashReporter:defaults.includes('--disable-crash-reporter'),disableBreakpad:defaults.includes('--disable-breakpad')}
+  const options=offlineCrashOptions(puppeteer,directory)
+  const helper=spawnSync(path.join(path.dirname(executablePath),'chrome_crashpad_handler'),['--help'],{timeout:3000,maxBuffer:64*1024,stdio:['ignore','pipe','pipe']})
+  result.helperProbe={actualExit:helper.status,signal:helper.signal,outputComplete:!helper.error&&helper.status!==null,stdoutBytes:helper.stdout?.length??0,stderrBytes:helper.stderr?.length??0,missingSharedLibrary:helper.stderr?.includes(Buffer.from('error while loading shared libraries'))??false}
+  phase='LAUNCH'
   browser=await puppeteer.launch({executablePath,userDataDir:profile,headless:true,...options})
+  phase='BROWSER_IDENTITY'
   const bs=await browser.target().createCDPSession(),version=await bs.send('Browser.getVersion')
+  result.browserRevision=version.revision
   if(version.revision!=='@3ff7ac5a9224be9156d7f8703a06e22890aafd34')throw Error('Calibration browser differs')
+  phase='PAGE_READY'
   const page=await browser.newPage(),session=await page.createCDPSession()
-  let observed=false,protocolOutcome='PENDING_AT_CRASH_OBSERVATION',timer,observeCrash
-  const crashSeen=new Promise(resolve=>{observeCrash=resolve})
-  page.on('error',()=>{observed=true;observeCrash()})
+  page.on('error',()=>{result.pageCrashObserved=true;resolveCrash?.()})
+  await session.send('Page.enable')
+  // Commit the owned blank document before Page.crash; the protocol refuses a
+  // target with pending navigation. No application or network request is used.
+  await page.goto('about:blank',{waitUntil:'load',timeout:5000})
+  result.pageInitialized=await page.evaluate(()=>location.href==='about:blank'&&document.readyState==='complete')
+  if(!result.pageInitialized)throw Error('Owned blank page not ready')
+  const target=await session.send('Target.getTargetInfo');ownedTarget=target.targetInfo.targetId
+  const crashSeen=new Promise(resolve=>{resolveCrash=resolve})
+  bs.on('Target.targetCrashed',event=>{if(event.targetId===ownedTarget){result.targetCrashObserved=true;resolveCrash()}})
+  await bs.send('Target.setDiscoverTargets',{discover:true})
   // This fresh about:blank renderer has no wallet, navigation or RPC connection.
-  void session.send('Page.crash').then(()=>{protocolOutcome='COMPLETED'},()=>{protocolOutcome='REJECTED'})
+  phase='CRASH_REQUEST';result.injectedRendererCrashRequests=1;result.protocolOutcome='PENDING_AT_CRASH_OBSERVATION'
+  void session.send('Page.crash').then(()=>{result.protocolOutcome='COMPLETED'},error=>{result.protocolOutcome='REJECTED';result.protocolFailure=calibrationFailureFacts(error)})
+  let timer;phase='WAIT_FOR_CRASH_EVENT'
   try{await Promise.race([crashSeen,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Crash control deadline')),5000)})])}finally{clearTimeout(timer)}
+  phase='ANNOTATIONS';result.injectedRendererCrashes=1
   let report
   const until=Date.now()+5000
   do{
    report=readOfflineCrashEvidence(directory)
+   result.evidence=report
    if(report.status!=='COMPLETE')throw Error('Crash control reader refused')
    if(report.reports.length)break
    await new Promise(resolve=>setTimeout(resolve,100))
   }while(Date.now()<until)
-  const child=browser.process(),alive=child.exitCode===null&&child.signalCode===null
-  const passed=observed&&alive&&report.reports.some(x=>x.crashpadStreamPresent&&x.processTypes.includes('renderer')&&x.exceptionCode!==null)
-  return {status:passed?'PASS':'FAILURE',injectedRendererCrashes:1,scope:'OWNED_ABOUT_BLANK_RENDERER',pageCrashObserved:observed,protocolOutcome,mainBrowserAlive:alive,evidence:report,rawDumpPublished:false}
- }finally{await browser?.close()}
+  const child=browser.process();result.mainBrowserAlive=child.exitCode===null&&child.signalCode===null
+  const passed=(result.pageCrashObserved||result.targetCrashObserved)&&result.mainBrowserAlive&&report.reports.some(x=>x.crashpadStreamPresent&&x.processTypes.includes('renderer')&&x.exceptionCode!==null)
+  result.status=passed?'PASS':'FAILURE';result.failure=passed?null:{category:'EXPECTED_RENDERER_ANNOTATION_NOT_OBSERVED'}
+  phase='COMPLETE'
+ }catch(error){result.failure=calibrationFailureFacts(error)}
+ finally{
+  result.phase=phase
+  if(!result.evidence&&fs.existsSync(directory))result.evidence=readOfflineCrashEvidence(directory)
+  const child=browser?.process();if(child)result.mainBrowserAlive=child.exitCode===null&&child.signalCode===null
+  try{await browser?.close();result.browserCloseStatus=browser?'COMPLETE':'NOT_STARTED'}catch{result.browserCloseStatus='FAILED';result.status='FAILURE';result.failure={category:'OWNED_BROWSER_CLOSE_FAILED'}}
+ }
+ return result
 }

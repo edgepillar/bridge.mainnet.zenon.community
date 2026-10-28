@@ -269,6 +269,14 @@ That injected renderer crash is reported separately from natural failures.
 The production bundle still fails on its first socket error or network-service
 replacement; failed starts are never retried.
 
+The standalone browser job first runs that same calibration before any chain
+job may start. A failed control leaves chain execution explicitly not run; it
+cannot qualify a candidate. The control commits a fresh blank document, observes
+only its owned crash target, and retains fixed phase/refusal categories, helper
+exit facts and reader outcomes even on failure. Target identifiers and raw errors
+are excluded. Its small artifact allows setup failures to be diagnosed without
+repeating completed native tests.
+
 The pinned Linux headless-shell package omits `chrome_crashpad_handler`. The
 `info` job installs only that member from the official full Chrome package at the
 same version, using a pinned 924,320-byte HTTP range, archive identity, compressed

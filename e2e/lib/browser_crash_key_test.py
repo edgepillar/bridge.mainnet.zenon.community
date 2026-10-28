@@ -84,6 +84,14 @@ class CrashKeyControls(unittest.TestCase):
         raw = bytearray(fixture(True));struct.pack_into('<H', raw, 224, 2)
         self.assertEqual(self.parse(bytes(raw))['messages'], [])
 
+    def test_fixed_format_reasons_survive_without_unknown_input(self):
+        self.assertEqual(crash.failure_reason(ValueError('HEADER')), 'HEADER')
+        self.assertEqual(crash.failure_reason(ValueError('private@example.invalid /private/path')), 'FORMAT_REFUSED')
+
+    def test_unicode_and_io_failures_never_publish_bytes_or_paths(self):
+        self.assertEqual(crash.failure_reason(UnicodeDecodeError('utf8', b'\xff', 0, 1, 'private input')), 'UTF8_REFUSED')
+        self.assertEqual(crash.failure_reason(FileNotFoundError(2, 'private path')), 'IO_MISSING')
+
 
 if __name__ == '__main__':
     unittest.main()
