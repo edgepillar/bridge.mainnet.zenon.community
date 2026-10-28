@@ -8,7 +8,7 @@
 // zenon-faucet/src/znn, where they were checked against a running chain.
 
 import { bech32 } from 'bech32'
-import { sha3_256 } from '@noble/hashes/sha3'
+import { sha3_256 } from '@noble/hashes/sha3.js'
 
 export const HASH_SIZE = 32
 export const ADDRESS_CORE_SIZE = 20

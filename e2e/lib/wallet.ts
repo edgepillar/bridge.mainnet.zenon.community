@@ -6,9 +6,9 @@
 // a wallet extension in the way. Derivation is zenon-faucet's, checked there
 // against the addresses the devnet README lists.
 
-import { ed25519 } from '@noble/curves/ed25519'
-import { hmac } from '@noble/hashes/hmac'
-import { sha512 } from '@noble/hashes/sha2'
+import { ed25519 } from '@noble/curves/ed25519.js'
+import { hmac } from '@noble/hashes/hmac.js'
+import { sha512 } from '@noble/hashes/sha2.js'
 import { mnemonicToSeedSync, validateMnemonic } from '@scure/bip39'
 import { wordlist } from '@scure/bip39/wordlists/english'
 

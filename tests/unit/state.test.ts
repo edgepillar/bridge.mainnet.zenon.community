@@ -1,6 +1,6 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { effectScope, nextTick } from 'vue'
-import { secp256k1 } from '@noble/curves/secp256k1'
+import { secp256k1 } from '@noble/curves/secp256k1.js'
 import { publicKeyToAddress } from 'viem/accounts'
 import { formatAddress, toBase64, toHex } from '../../src/znn/primitives.ts'
 

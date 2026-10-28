@@ -1,4 +1,4 @@
-import { ed25519 } from '@noble/curves/ed25519'
+import { ed25519 } from '@noble/curves/ed25519.js'
 import type { PublicClient } from 'viem'
 import type { ZenonApi } from '../znn/api.ts'
 import { computeBlockHash } from '../znn/block.ts'

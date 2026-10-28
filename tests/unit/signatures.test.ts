@@ -4,7 +4,7 @@
 // the v adjustment the EVM redeem needs.
 import { describe, expect, it } from 'vitest'
 import { recoverAddress } from 'viem'
-import { secp256k1 } from '@noble/curves/secp256k1'
+import { secp256k1 } from '@noble/curves/secp256k1.js'
 import { wrapMessage, unwrapMessage, signTss, evmAddressOfPublicKey, tssPublicKey } from '../../e2e/lib/messages.ts'
 import { evmSignature } from '../../src/core/status.ts'
 
@@ -50,7 +50,7 @@ describe('wrap signature from mainnet', () => {
 })
 
 describe('test orchestrator signing', () => {
-  const key = secp256k1.utils.randomPrivateKey()
+  const key = secp256k1.utils.randomSecretKey()
 
   it('signs a wrap so that the EVM recovers the TSS address', async () => {
     const digest = wrapMessage({ networkClass: 2, chainId: 31337, bridge: ETH_BRIDGE, id: 'ab'.repeat(32), to: SIGNED.toAddress, token: SIGNED.tokenAddress, amountMinusFee: 5n })
