@@ -41,10 +41,21 @@ export function readOfflineCrashEvidence(directory){
  }catch{return {status:'UNAVAILABLE',reason:readerReasons.has(result?.reason)?result.reason:'OWNED_ANNOTATION_READ_REFUSED',rawDumpPublished:false,readerProcess}}
 }
 
+export function offlineRendererDumpControlPassed(control){
+ const complete=report=>report?.status==='COMPLETE'&&Array.isArray(report.reports)&&report.rawDumpPublished===false&&report.otherAnnotationValuesRead===false&&report.readerProcess?.state==='EXITED'&&report.readerProcess.actualExit===0&&report.readerProcess.signal===null&&report.readerProcess.outputComplete===true
+ if(control?.scope!=='OWNED_ABOUT_BLANK_RENDERER'||control.pageInitialized!==true||control.injectedRendererCrashRequests!==1||control.mainBrowserAlive!==true)return false
+ if(!complete(control.baseline)||control.baseline.reports.length!==0||!complete(control.evidence)||control.evidence.reports.length!==1)return false
+ if(!['COMPLETED','PENDING_AT_CRASH_OBSERVATION'].includes(control.protocolOutcomeBeforeTeardown)&&!(control.protocolOutcomeBeforeTeardown==='REJECTED'&&control.protocolFailure?.category==='TARGET_CLOSED'))return false
+ const report=control.evidence.reports[0]
+ // The pinned Linux x64 Page.crash control emits SIGTRAP (5). An arbitrary
+ // dump, a browser/utility dump, or a pre-existing report cannot calibrate it.
+ return report.status==='COMPLETE'&&report.crashpadStreamPresent===true&&Array.isArray(report.processTypes)&&report.processTypes.length===1&&report.processTypes[0]==='renderer'&&report.exceptionCode===5&&Number.isSafeInteger(report.bytesRead)&&report.bytesRead>0&&report.bytesRead<=2*1024**2&&report.rawDumpPublished===false&&report.otherAnnotationValuesRead===false&&Array.isArray(report.messages)&&report.messages.length===0
+}
+
 export async function calibrateOfflineCrashReader(puppeteer,executablePath,work){
  const directory=path.join(work,'calibration-crashes'),profile=path.join(work,'calibration-profile')
- let browser,phase='OPTIONS',ownedTarget,resolveCrash
- const result={status:'FAILURE',scope:'OWNED_ABOUT_BLANK_RENDERER',phase,pageInitialized:false,pageCrashObserved:false,targetCrashObserved:false,injectedRendererCrashRequests:0,injectedRendererCrashes:0,protocolOutcome:'NOT_REQUESTED',mainBrowserAlive:false,browserCloseStatus:'NOT_STARTED',evidence:null,failure:null,rawDumpPublished:false}
+ let browser,phase='OPTIONS',ownedTarget
+ const result={status:'FAILURE',scope:'OWNED_ABOUT_BLANK_RENDERER',phase,pageInitialized:false,pageCrashObserved:false,targetCrashObserved:false,injectedRendererCrashRequests:0,injectedRendererCrashes:0,dumpObserved:false,protocolOutcome:'NOT_REQUESTED',protocolOutcomeBeforeTeardown:'NOT_REQUESTED',mainBrowserAlive:false,browserCloseStatus:'NOT_STARTED',baseline:null,evidence:null,failure:null,rawDumpPublished:false}
  try{
   const defaults=await puppeteer.defaultArgs()
   result.defaultCrashFlags={disableCrashReporter:defaults.includes('--disable-crash-reporter'),disableBreakpad:defaults.includes('--disable-breakpad')}
@@ -59,7 +70,7 @@ export async function calibrateOfflineCrashReader(puppeteer,executablePath,work)
   if(version.revision!=='@3ff7ac5a9224be9156d7f8703a06e22890aafd34')throw Error('Calibration browser differs')
   phase='PAGE_READY'
   const page=await browser.newPage(),session=await page.createCDPSession()
-  page.on('error',()=>{result.pageCrashObserved=true;resolveCrash?.()})
+  page.on('error',()=>{result.pageCrashObserved=true})
   await session.send('Page.enable')
   // Commit the owned blank document before Page.crash; the protocol refuses a
   // target with pending navigation. No application or network request is used.
@@ -67,15 +78,16 @@ export async function calibrateOfflineCrashReader(puppeteer,executablePath,work)
   result.pageInitialized=await page.evaluate(()=>location.href==='about:blank'&&document.readyState==='complete')
   if(!result.pageInitialized)throw Error('Owned blank page not ready')
   const target=await session.send('Target.getTargetInfo');ownedTarget=target.targetInfo.targetId
-  const crashSeen=new Promise(resolve=>{resolveCrash=resolve})
-  bs.on('Target.targetCrashed',event=>{if(event.targetId===ownedTarget){result.targetCrashObserved=true;resolveCrash()}})
+  bs.on('Target.targetCrashed',event=>{if(event.targetId===ownedTarget)result.targetCrashObserved=true})
   await bs.send('Target.setDiscoverTargets',{discover:true})
+  phase='CRASH_BASELINE';result.baseline=readOfflineCrashEvidence(directory)
+  if(result.baseline.status!=='COMPLETE'||result.baseline.reports.length!==0)throw Error('Crash control baseline refused')
   // This fresh about:blank renderer has no wallet, navigation or RPC connection.
   phase='CRASH_REQUEST';result.injectedRendererCrashRequests=1;result.protocolOutcome='PENDING_AT_CRASH_OBSERVATION'
   void session.send('Page.crash').then(()=>{result.protocolOutcome='COMPLETED'},error=>{result.protocolOutcome='REJECTED';result.protocolFailure=calibrationFailureFacts(error)})
-  let timer;phase='WAIT_FOR_CRASH_EVENT'
-  try{await Promise.race([crashSeen,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Crash control deadline')),5000)})])}finally{clearTimeout(timer)}
-  phase='ANNOTATIONS';result.injectedRendererCrashes=1
+  // Both headless CI controls retained real dumps without either CDP crash event.
+  // Calibrate the reader against the actual new renderer dump, not an event.
+  phase='WAIT_FOR_CRASH_DUMP'
   let report
   const until=Date.now()+5000
   do{
@@ -86,7 +98,9 @@ export async function calibrateOfflineCrashReader(puppeteer,executablePath,work)
    await new Promise(resolve=>setTimeout(resolve,100))
   }while(Date.now()<until)
   const child=browser.process();result.mainBrowserAlive=child.exitCode===null&&child.signalCode===null
-  const passed=(result.pageCrashObserved||result.targetCrashObserved)&&result.mainBrowserAlive&&report.reports.some(x=>x.crashpadStreamPresent&&x.processTypes.includes('renderer')&&x.exceptionCode!==null)
+  result.protocolOutcomeBeforeTeardown=result.protocolOutcome
+  const passed=offlineRendererDumpControlPassed(result)
+  result.dumpObserved=passed;result.injectedRendererCrashes=passed?1:0
   result.status=passed?'PASS':'FAILURE';result.failure=passed?null:{category:'EXPECTED_RENDERER_ANNOTATION_NOT_OBSERVED'}
   phase='COMPLETE'
  }catch(error){result.failure=calibrationFailureFacts(error)}

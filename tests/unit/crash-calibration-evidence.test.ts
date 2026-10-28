@@ -1,7 +1,7 @@
 import {expect,it,vi} from 'vitest'
 import fs from 'node:fs'
 import puppeteer from 'puppeteer-core'
-import {calibrationFailureFacts,offlineCrashOptions} from '../../e2e/lib/browser-crash-evidence.mjs'
+import {calibrationFailureFacts,offlineCrashOptions,offlineRendererDumpControlPassed} from '../../e2e/lib/browser-crash-evidence.mjs'
 it('classifies protocol refusal without emitting the message',()=>{
  const report=calibrationFailureFacts(Object.assign(new Error('Protocol error (Page.crash): Page has pending navigations, not killing'),{code:-32000}))
  expect(report.category).toBe('PENDING_NAVIGATION');expect(report.protocolCode).toBe(-32000)
@@ -48,3 +48,35 @@ it('preserves the reporter-default guard when an asynchronous provider omits the
  await expect(offlineCrashOptions({defaultArgs:async()=>[]},'/owned-ci-crash-control')).rejects.toThrow('Reporter defaults differ')
  expect(fs.mkdirSync).not.toHaveBeenCalled()
 }))
+
+function dumpControl(){
+ const readerProcess={state:'EXITED',actualExit:0,signal:null,outputComplete:true}
+ return {scope:'OWNED_ABOUT_BLANK_RENDERER',pageInitialized:true,injectedRendererCrashRequests:1,mainBrowserAlive:true,protocolOutcomeBeforeTeardown:'PENDING_AT_CRASH_OBSERVATION',pageCrashObserved:false,targetCrashObserved:false,
+  baseline:{status:'COMPLETE',reports:[],rawDumpPublished:false,otherAnnotationValuesRead:false,readerProcess},
+  evidence:{status:'COMPLETE',rawDumpPublished:false,otherAnnotationValuesRead:false,readerProcess:{...readerProcess},reports:[{status:'COMPLETE',crashpadStreamPresent:true,messages:[],processTypes:['renderer'],exceptionCode:5,bytesRead:1297,rawDumpPublished:false,otherAnnotationValuesRead:false}]}}
+}
+it('calibrates the actual new renderer dump when optional CDP crash events are absent',()=>{
+ expect(offlineRendererDumpControlPassed(dumpControl())).toBe(true)
+})
+it('rejects an absent or nonempty pre-crash baseline',()=>{
+ const control=dumpControl()
+ expect(offlineRendererDumpControlPassed({...control,baseline:null})).toBe(false)
+ expect(offlineRendererDumpControlPassed({...control,baseline:{...control.baseline,reports:control.evidence.reports}})).toBe(false)
+})
+it('requires the actual complete reader outcome before qualifying a dump',()=>{
+ for(const readerProcess of [{state:'EXITED',actualExit:1,signal:null,outputComplete:true},{state:'SIGNALED',actualExit:null,signal:'SIGTERM',outputComplete:false}]){
+  const control=dumpControl();expect(offlineRendererDumpControlPassed({...control,evidence:{...control.evidence,readerProcess}})).toBe(false)
+ }
+})
+it('rejects unrelated, multiple, wrong-signal and incomplete dump evidence',()=>{
+ for(const changed of [{exceptionCode:11},{processTypes:['browser']},{crashpadStreamPresent:false},{rawDumpPublished:true},{messages:[{}]},{bytesRead:3*1024**2}]){
+  const control=dumpControl();expect(offlineRendererDumpControlPassed({...control,evidence:{...control.evidence,reports:[{...control.evidence.reports[0],...changed}]}})).toBe(false)
+ }
+ const control=dumpControl();expect(offlineRendererDumpControlPassed({...control,evidence:{...control.evidence,reports:[...control.evidence.reports,...control.evidence.reports]}})).toBe(false)
+})
+it('requires one owned request, a ready blank page, a live browser and an unrefused command',()=>{
+ for(const changed of [{scope:'OTHER'},{pageInitialized:false},{injectedRendererCrashRequests:0},{injectedRendererCrashRequests:2},{mainBrowserAlive:false},{protocolOutcomeBeforeTeardown:'REJECTED',protocolFailure:{category:'PENDING_NAVIGATION'}}]){
+  expect(offlineRendererDumpControlPassed({...dumpControl(),...changed})).toBe(false)
+ }
+ expect(offlineRendererDumpControlPassed(null)).toBe(false)
+})

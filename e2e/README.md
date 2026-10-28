@@ -274,8 +274,11 @@ job may start. Both callers await the installed Puppeteer's asynchronous
 `defaultArgs()` result before checking reporter flags or launching a browser.
 The regression uses that real API without starting a browser.
 A failed control leaves chain execution explicitly not run; it
-cannot qualify a candidate. The control commits a fresh blank document, observes
-only its owned crash target, and retains fixed phase/refusal categories, helper
+cannot qualify a candidate. The control commits a fresh blank document and
+requires an empty pre-crash baseline, one owned request, one new renderer
+SIGTRAP dump and the actual complete reader exit while the main browser stays
+alive. Optional CDP crash events are retained separately; a target-close outcome
+alone cannot qualify the control. It retains fixed phase/refusal categories, helper
 exit facts and reader outcomes even on failure. Target identifiers and raw errors
 are excluded. Its small artifact allows setup failures to be diagnosed without
 repeating completed native tests.
