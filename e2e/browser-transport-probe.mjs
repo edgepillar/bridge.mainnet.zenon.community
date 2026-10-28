@@ -13,6 +13,7 @@ import {socketFailureClass} from './lib/socket-evidence.ts'
 import {browserSignalEvidence} from './lib/browser-signal-evidence.ts'
 import {compiledStartupEvidence,compiledScriptPath} from './lib/compiled-startup-evidence.mjs'
 import {offlineCrashOptions,offlineReporterIdentity,readOfflineCrashEvidence,calibrateOfflineCrashReader} from './lib/browser-crash-evidence.mjs'
+import {directNetworkPolicy,fixtureConnectPolicy,fixtureRequestAllowed} from './lib/browser-network-policy.mjs'
 const repo=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..')
 const ci=process.env.GITHUB_ACTIONS==='true',parent=process.env.SPV_TASK_SCRATCH??(ci?process.env.RUNNER_TEMP:undefined)
 if(!parent||!path.isAbsolute(parent)||!fs.statSync(parent).isDirectory())throw Error('Owned experiment scratch is required')
@@ -29,7 +30,7 @@ if(fs.existsSync(reportFile))throw Error('Reconcile the existing report before a
 fs.mkdirSync(path.dirname(reportFile),{recursive:true})
 const sha=b=>crypto.createHash('sha256').update(b).digest('hex')
 const lockBytes=fs.readFileSync(path.join(repo,'package-lock.json')),lock=JSON.parse(lockBytes)
-const sourceFiles=Object.fromEntries(['e2e/browser-transport-probe.mjs','e2e/lib/probe-ledger-round.mjs','e2e/lib/probe-package-lock.mjs','e2e/lib/browser-termination-evidence.ts','e2e/lib/browser-memory-evidence.ts','e2e/lib/browser-stderr-evidence.ts','e2e/lib/socket-evidence.ts','e2e/lib/browser-signal-evidence.ts','e2e/lib/browser-signal-watch.py','e2e/lib/compiled-startup-evidence.mjs','e2e/lib/browser-crash-evidence.mjs','e2e/lib/browser-crash-key.py','e2e/lib/reporter-component.mjs','e2e/lab/browser-reporter.pin.json','e2e/lab/install-browser-reporter.mjs'].map(n=>[n,sha(fs.readFileSync(path.join(repo,n)))]))
+const sourceFiles=Object.fromEntries(['e2e/browser-transport-probe.mjs','e2e/lib/probe-ledger-round.mjs','e2e/lib/probe-package-lock.mjs','e2e/lib/browser-termination-evidence.ts','e2e/lib/browser-memory-evidence.ts','e2e/lib/browser-stderr-evidence.ts','e2e/lib/socket-evidence.ts','e2e/lib/browser-signal-evidence.ts','e2e/lib/browser-signal-watch.py','e2e/lib/compiled-startup-evidence.mjs','e2e/lib/browser-crash-evidence.mjs','e2e/lib/browser-crash-key.py','e2e/lib/reporter-component.mjs','e2e/lab/browser-reporter.pin.json','e2e/lab/install-browser-reporter.mjs','e2e/lib/browser-network-policy.mjs'].map(n=>[n,sha(fs.readFileSync(path.join(repo,n)))]))
 const memoryModule=await import(pathToFileURL(path.join(repo,'e2e/lib/browser-memory-evidence.ts')).href)
 const stderrModule=await import(pathToFileURL(path.join(repo,'e2e/lib/browser-stderr-evidence.ts')).href)
 const binaryHash=()=>{const file=process.env.CHROME_PATH,st=fs.lstatSync(file);if(!st.isFile()||st.isSymbolicLink()||st.size>1024**3)throw Error('Browser executable refused');const h=crypto.createHash('sha256'),fd=fs.openSync(file,'r'),buffer=Buffer.alloc(128*1024);try{for(;;){const n=fs.readSync(fd,buffer,0,buffer.length,null);if(!n)break;h.update(buffer.subarray(0,n))}}finally{fs.closeSync(fd)}return h.digest('hex')}
@@ -71,7 +72,7 @@ save()
 try{
  if(compiled){
   const {preview}=await import('vite')
-  previewServer=await preview({envDir:false,logLevel:'error',build:{outDir:'e2e/.state/browser-build'},preview:{host:'127.0.0.1',port:5195,strictPort:true}})
+  previewServer=await preview({envDir:false,logLevel:'error',build:{outDir:'e2e/.state/browser-build'},preview:{host:'127.0.0.1',port:5195,strictPort:true,headers:{'Content-Security-Policy':fixtureConnectPolicy(['http://127.0.0.1:5195','http://127.0.0.1:46545','http://127.0.0.1:46997','ws://127.0.0.1:46998'])}}})
   server=previewServer.httpServer
  }else{
  server=http.createServer((_,r)=>{r.writeHead(200,{'Content-Type':'text/html','Content-Security-Policy':"default-src 'self'; connect-src 'self'"+(labMode?' ws://127.0.0.1:46998':'')+"; script-src 'none'"});r.end('<!doctype html><title>Fragment startup control</title>')})
@@ -99,8 +100,8 @@ try{
  const started=Date.now()
  for(let index=0;index<planned;index++){
   if(Date.now()-started>150000)throw Error('Experiment time bound')
-  const mode=compiled?'COMPILED_APPLICATION_STARTUP':labMode?'GO_RPC_STAGED':['SINGLE_FINAL','EMPTY_FINAL','EMPTY_FINAL_SPLIT'][index%3],interception=compiled||index%2===0
-  const trial={index,mode,interception,expectedMessages:compiled?1:13,frameErrors:0,emptyFrameErrors:0,failureClasses:[],handshakeStatus:null,consoleErrors:0,outboundRequests:0,cspViolations:0,networkServiceChanged:null}
+  const mode=compiled?'COMPILED_APPLICATION_STARTUP':labMode?'GO_RPC_STAGED':['SINGLE_FINAL','EMPTY_FINAL','EMPTY_FINAL_SPLIT'][index%3],interception=false,directGuard=compiled||index%2===0
+  const trial={index,mode,interception,directGuard,expectedMessages:compiled?1:13,frameErrors:0,emptyFrameErrors:0,failureClasses:[],handshakeStatus:null,consoleErrors:0,outboundRequests:0,cspViolations:0,networkServiceChanged:null}
   currentTrial=trial
   currentStderr=undefined;currentTermination=undefined
   const profile=path.join(work,'profile-'+index),memory=memoryModule.browserMemoryEvidence()
@@ -139,7 +140,11 @@ try{
    await page.evaluateOnNewDocument(()=>document.addEventListener('securitypolicyviolation',()=>window.__qualificationCspViolation()))
   }
   page.on('console',m=>{if(m.type()==='error')trial.consoleErrors++})
-  if(interception){await page.setRequestInterception(true);page.on('request',r=>{const url=new URL(r.url());if(compiled&&url.hostname!=='127.0.0.1'&&url.protocol!=='data:'){trial.outboundRequests++;void r.abort()}else void r.continue()})}
+  if(directGuard){
+   const allowed=[origin,'ws://127.0.0.1:'+(labMode?'46998':server.address().port),...(compiled?['http://127.0.0.1:46545','http://127.0.0.1:46997']:[])]
+   await session.send('Network.setBlockedURLs',directNetworkPolicy(allowed))
+   page.on('request',request=>{if(!fixtureRequestAllowed(request.url(),allowed))trial.outboundRequests++})
+  }
   // Establish the static owned origin before measuring its network service;
   // Linux may create that service lazily. No WebSocket exists yet.
   if(!compiled)await page.goto(origin,{waitUntil:'domcontentloaded'})

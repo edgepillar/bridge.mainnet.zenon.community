@@ -232,7 +232,7 @@ from the completed Darwin package control and any earlier successful cold case.
 
 The `browser-transport` CI job uses the same pinned sandboxed Chromium for 48
 fresh browser starts. It varies complete messages, empty final continuations,
-separately scheduled final continuations and request interception. Complete
+separately scheduled final continuations and direct network blocking. Complete
 messages are serialized on the synthetic loopback server. Each start must receive
 all 13 valid JSON replies and keep its socket open during the observation window.
 Socket or console errors, unexpected service replacement and incomplete controls
@@ -249,6 +249,36 @@ This bounded experiment investigates the preserved natural network-service
 replacement. A passing probe or injected calibration does not establish its cause
 or dispose of historical failures. The browser pin, fatal transport assertions,
 sandbox and five-node readiness requirements are unchanged.
+
+An actual source-bound production-bundle failure at the thirteenth fresh start
+captured a browser `mojo-message-error` digest of
+`69c060217c0aaa981ed6d74af3d0d36dd720a2bc952df8dae6cced7c8b0f57fa`
+over 57 bytes. That digest exactly matches the public pinned Chromium rejection
+for a duplicate active DevTools request ID, including its standard Mojo prefix.
+The [interceptor](https://github.com/chromium/chromium/blob/3ff7ac5a9224be9156d7f8703a06e22890aafd34/content/browser/devtools/devtools_url_loader_interceptor.cc#L814)
+reports that collision as a bad message. The
+[browser error handler](https://github.com/chromium/chromium/blob/3ff7ac5a9224be9156d7f8703a06e22890aafd34/content/browser/browser_child_process_host_impl.cc#L754)
+synchronously retains the selected error and terminates the network service.
+The same natural event independently recorded an owned-browser SIGKILL. This
+identifies the immediate disconnection mechanism; the internal origin of the
+colliding renderer request IDs and uninstrumented production behavior are separate.
+
+Qualification therefore uses the pinned renderer's `Network.setBlockedURLs`
+allow rules before a default block, plus an exact loopback `connect-src` header
+on the owned fixture server. It never enables Fetch interception. Component RPC
+replies and isolated landing pages are served by the bounded loopback fixture
+middleware instead of intercepted requests. Outbound observations, CSP errors,
+socket errors and service replacement remain fatal. The additional fixture header
+does not establish production hosting/header acceptance or change the product CSP.
+
+Before chains start, a separate owned control proves allowed HTTP and WebSocket
+traffic succeeds, a denied HTTP image is blocked by the inspector without reaching
+its server, and a denied WebSocket is blocked by the fixture's connect policy
+without an upgrade. Both denied targets are other owned loopback endpoints;
+no public endpoint is contacted. Its source/lock/browser identities, actual
+counts and network-service continuity are retained in `network-policy-control.json`.
+Failure is fatal and never falls back to Fetch interception. Full current-source
+native/Docker and compiled-startup qualification remains required separately.
 
 Each native/Docker job also runs 12 fresh browsers before its owned lab stops.
 These use the actual qualified Go RPC codec: one validated chain-322 frontier

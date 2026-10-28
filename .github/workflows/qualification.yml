@@ -68,6 +68,8 @@ jobs:
         run: node e2e/lab/install-browser-reporter.mjs
       - name: Calibrate the owned offline renderer before chains
         run: node e2e/browser-crash-control.mjs
+      - name: Qualify the direct network guard before chains
+        run: node e2e/browser-network-control.mjs
       - name: Exercise bounded fresh-browser transport starts
         run: node --experimental-strip-types e2e/browser-transport-probe.mjs
       - name: Retain sanitized browser transport evidence
@@ -78,6 +80,7 @@ jobs:
           path: |
             .browser-results/transport-probe-report.json
             .browser-results/offline-crash-control.json
+            .browser-results/network-policy-control.json
             .lab-tools/browser-reporter-manifest.json
           include-hidden-files: true
           retention-days: 14

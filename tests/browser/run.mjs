@@ -5,10 +5,31 @@ import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import puppeteer from 'puppeteer-core'
 import { createServer } from 'vite'
+import {directNetworkPolicy,fixtureConnectPolicy,fixtureRequestAllowed} from '../../e2e/lib/browser-network-policy.mjs'
 if (!process.env.CHROME_PATH) throw new Error('Set CHROME_PATH to a compatible Chromium executable')
-const server = await createServer({ envDir: false, cacheDir: process.env.QUALIFICATION_CACHE_DIR, server: { host: '127.0.0.1', port: 5195, strictPort: true }, logLevel: 'error' })
+let browser,page
+const fixtureOrigins=['http://127.0.0.1:5195','ws://127.0.0.1:5195']
+const server = await createServer({ envDir: false, cacheDir: process.env.QUALIFICATION_CACHE_DIR,
+  plugins:[{name:'owned-fixture-routes',configureServer(vite){vite.middlewares.use(async(request,response,next)=>{
+    const url=new URL(request.url,'http://127.0.0.1:5195')
+    if(request.headers['x-owned-landing']==='1'&&request.method==='GET'&&['/','/safe-path'].includes(url.pathname)){
+      response.setHeader('Content-Type','text/html');response.end('<title>Isolated landing</title>');return
+    }
+    if(url.pathname!=='/fixture-rpc'){next();return}
+    if(request.method!=='POST'||!page){response.statusCode=405;response.end();return}
+    try{
+      const chunks=[];let bytes=0
+      for await(const chunk of request){bytes+=chunk.length;if(bytes>65536)throw Error('Fixture body bound');chunks.push(chunk)}
+      const body=await page.evaluate(async(json)=>{
+        const raw=JSON.parse(json)
+        const reply=async(q)=>{try{return {jsonrpc:'2.0',id:q.id,result:await window.__fixture.provider.request(q)}}catch(error){return {jsonrpc:'2.0',id:q.id,error:{code:-32000,message:error.message}}}}
+        return JSON.stringify(Array.isArray(raw)?await Promise.all(raw.map(reply)):await reply(raw),(_key,value)=>typeof value==='bigint'?value.toString():value)
+      },Buffer.concat(chunks).toString('utf8'))
+      response.setHeader('Content-Type','application/json');response.end(body)
+    }catch{report.errors.push('Owned fixture RPC bridge failed');response.statusCode=500;response.end()}
+  })}}],
+  server: { host: '127.0.0.1', port: 5195, strictPort: true,headers:{'Content-Security-Policy':fixtureConnectPolicy(fixtureOrigins)} }, logLevel: 'error' })
 await server.listen()
-let browser
 const git = (args) => execFileSync('git', args).toString().trim()
 const report = { mode: 'offline Vue component qualification', startedAt: new Date().toISOString(),
   sourceCommit: git(['rev-parse','HEAD']), sourceTree: git(['rev-parse','HEAD^{tree}']),
@@ -21,21 +42,11 @@ try {
   browser = await puppeteer.launch({ executablePath: process.env.CHROME_PATH, userDataDir: process.env.BROWSER_PROFILE_DIR, headless: true })
   report.browserVersion = await browser.version()
   if (process.env.EXPECTED_BROWSER_VERSION) assert(report.browserVersion.endsWith(process.env.EXPECTED_BROWSER_VERSION), 'Browser version differs from qualification pin')
-  const page = await browser.newPage()
+  page = await browser.newPage()
   page.on('pageerror', (e) => report.errors.push(String(e)))
-  await page.setRequestInterception(true)
-  page.on('request', async (r) => {
-    if(r.url()==='http://127.0.0.1:5195/fixture-rpc') {
-      const body=await page.evaluate(async(json)=>{
-        const raw=JSON.parse(json)
-        const reply=async(q)=>{try{return {jsonrpc:'2.0',id:q.id,result:await window.__fixture.provider.request(q)}}catch(error){return {jsonrpc:'2.0',id:q.id,error:{code:-32000,message:error.message}}}}
-        return JSON.stringify(Array.isArray(raw)?await Promise.all(raw.map(reply)):await reply(raw),(_key,value)=>typeof value==='bigint'?value.toString():value)
-      },r.postData())
-      await r.respond({status:200,contentType:'application/json',body})
-    }
-    else if (r.url().startsWith('http://127.0.0.1:5195/') || r.url().startsWith('data:')) void r.continue()
-    else { report.errors.push('Unexpected outbound request'); void r.abort() }
-  })
+  const network=await page.createCDPSession();await network.send('Network.enable');await network.send('Network.setBlockedURLs',directNetworkPolicy(fixtureOrigins))
+  page.on('request',request=>{if(!fixtureRequestAllowed(request.url(),fixtureOrigins))report.errors.push('Unexpected outbound request')})
+  report.networkPolicy={mode:'DIRECT_NETWORK_DEFAULT_BLOCK_AND_FIXTURE_CONNECT_HEADER',fetchInterception:false,origins:fixtureOrigins}
   const fresh = async () => { await page.goto('http://127.0.0.1:5195/tests/browser/harness.html'); await page.waitForSelector('input[aria-label="Amount"]') }
   const input = (selector, value) => page.$eval(selector, (e, v) => { e.value = v; e.dispatchEvent(new Event('input', { bubbles: true })) }, value)
   const amount = (v) => input('input[aria-label="Amount"]', v)
@@ -108,6 +119,8 @@ try {
   assert.notEqual(await page.$eval('canvas.starfield',(c)=>c.toDataURL()),frame);check('canvas chain indicator stays animated with OS animation effects disabled')
   await fresh()
   const second = await browser.newPage()
+  const secondNetwork=await second.createCDPSession();await secondNetwork.send('Network.enable');await secondNetwork.send('Network.setBlockedURLs',directNetworkPolicy(fixtureOrigins))
+  second.on('request',request=>{if(!fixtureRequestAllowed(request.url(),fixtureOrigins))report.errors.push('Unexpected second-tab outbound request')})
   await second.goto('http://127.0.0.1:5195/tests/browser/harness.html'); await second.waitForSelector('input[aria-label="Amount"]')
   await page.evaluate(() => {
     const f = window.__fixture
@@ -123,12 +136,9 @@ try {
   await page.evaluate(async () => { window.__fixture.releaseOwned(); await window.__fixture.ownership })
   assert.match(await attempt(), /unresolved/);await second.close();check('real cross-tab Web Lock and durable ownership prevent a second wallet invocation')
   const landing = await browser.newPage()
-  await landing.setRequestInterception(true)
-  landing.on('request',(r)=>{
-    if (r.isNavigationRequest() && !r.url().includes('/affiliate.html')) void r.respond({status:200,contentType:'text/html',body:'<title>Isolated landing</title>'})
-    else if(r.url().startsWith('http://127.0.0.1:5195/'))void r.continue()
-    else {report.errors.push('Affiliate attempted an external request');void r.abort()}
-  })
+  const landingNetwork=await landing.createCDPSession();await landingNetwork.send('Network.enable');await landingNetwork.send('Network.setBlockedURLs',directNetworkPolicy(fixtureOrigins))
+  await landing.setExtraHTTPHeaders({'X-Owned-Landing':'1'})
+  landing.on('request',request=>{if(!fixtureRequestAllowed(request.url(),fixtureOrigins))report.errors.push('Affiliate attempted an external request')})
   for (const target of ['https://unrelated.invalid/wallet','javascript:alert(1)','https://user@unrelated.invalid/']) {
     await landing.goto('http://127.0.0.1:5195/affiliate.html?originURL='+encodeURIComponent(target))
     await landing.waitForFunction(()=>document.title==='Isolated landing')
