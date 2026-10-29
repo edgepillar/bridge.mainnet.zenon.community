@@ -72,7 +72,7 @@ try {
   await typeInto(app, 'input[placeholder^="wss://"]', NODE)
   await clickText(app, /^Add$/)
   await wait(1500)
-  await clickText(app, new RegExp(`^${NODE.replace(/[./]/g, '\\$&')}$`))
+  await clickText(app, new RegExp(`^${RegExp.escape(NODE)}$`))
   await wait(2500)
   await typeInto(app, 'input[placeholder^="Chain identifier"]', String(CHAIN))
   await clickText(app, /^Save$/)
