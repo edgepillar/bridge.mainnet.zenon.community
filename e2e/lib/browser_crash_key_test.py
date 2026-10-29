@@ -62,6 +62,13 @@ class CrashKeyControls(unittest.TestCase):
         self.assertEqual(set(value), {'sha256','bytes','category','validation','interfaces','methods'})
         self.assertFalse(any(x in str(value) for x in ['example.invalid','/private/','token=']))
 
+    def test_exact_public_devtools_rejection_is_classified_without_raw_text(self):
+        for raw in [b'DevTools: Duplicate request ID', b'Received bad user message: DevTools: Duplicate request ID', b'DevTools: Duplicate request ID\0']:
+            value = crash.classify_message(raw)
+            self.assertEqual(value['category'], 'DEVTOOLS_DUPLICATE_REQUEST_ID')
+            self.assertNotIn('Duplicate request ID', str(value))
+        self.assertEqual(crash.classify_message(b'DevTools: Duplicate request ID /private/value')['category'], 'UNCLASSIFIED')
+
     def test_validation_identifiers_are_allowlisted(self):
         value = crash.classify_message(b'Validation failed for network.mojom.WebSocketClient.OnDataFrame [VALIDATION_ERROR_UNKNOWN_ENUM_VALUE] /private/ignored')
         self.assertEqual(value['category'], 'MOJO_VALIDATION_ERROR')

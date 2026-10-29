@@ -17,8 +17,10 @@ import { browserStderrEvidence } from './lib/browser-stderr-evidence.ts'
 import { browserTerminationEvidence } from './lib/browser-termination-evidence.ts'
 import { browserMemoryEvidence } from './lib/browser-memory-evidence.ts'
 import { browserSignalEvidence } from './lib/browser-signal-evidence.ts'
+import { directNetworkPolicy,fixtureConnectPolicy,fixtureRequestAllowed } from './lib/browser-network-policy.mjs'
 
 const outDir='e2e/.state/browser-build', origin='http://127.0.0.1:5195'
+const fixtureOrigins=[origin,'http://127.0.0.1:46545','http://127.0.0.1:46997','ws://127.0.0.1:46998']
 const netLogFile='e2e/.state/compiled-netlog.private.json'
 let server: PreviewServer, browser: Browser, page: Page
 const errors:string[]=[], outbound:string[]=[], scripts=new Set<string>(), violations:string[]=[]
@@ -48,7 +50,7 @@ beforeAll(async()=>{
   process.env.NODE_ENV='production'
   try { await build({envDir:false,logLevel:'error',mode:'production',build:{outDir,emptyOutDir:true}}) }
   finally { if(previousNodeEnv===undefined)delete process.env.NODE_ENV;else process.env.NODE_ENV=previousNodeEnv }
-  server=await preview({envDir:false,logLevel:'error',build:{outDir},preview:{host:'127.0.0.1',port:5195,strictPort:true}})
+  server=await preview({envDir:false,logLevel:'error',build:{outDir},preview:{host:'127.0.0.1',port:5195,strictPort:true,headers:{'Content-Security-Policy':fixtureConnectPolicy(fixtureOrigins)}}})
   memoryEvidence=browserMemoryEvidence()
   browser=await puppeteer.launch({executablePath:process.env.CHROME_PATH,headless:true,args:['--log-net-log='+path.resolve(netLogFile)]})
   ownedBrowserStderr=browser.process()?.stderr
@@ -86,6 +88,7 @@ beforeAll(async()=>{
   const sockets=new Map<string,{evidence:typeof socketEvidence[number];frontiers:Set<number>}>()
   const started=performance.now(),elapsed=()=>Math.round(performance.now()-started)
   await session.send('Network.enable')
+  await session.send('Network.setBlockedURLs',directNetworkPolicy(fixtureOrigins))
   session.on('Network.webSocketCreated',({requestId,url})=>{
     if(socketEvidence.length>=16){errors.push('Compiled browser exceeded the WebSocket evidence bound');return}
     const evidence={allowed:url==='ws://127.0.0.1:46998/',status:null as number|null,error:false,closed:false,frontier:null as {chainId:number;height:number}|null,
@@ -127,11 +130,8 @@ beforeAll(async()=>{
   })
   await page.exposeFunction('__labPolicyViolation',(directive:string)=>violations.push(directive))
   await page.evaluateOnNewDocument(()=>document.addEventListener('securitypolicyviolation',(event)=>(window as any).__labPolicyViolation(event.effectiveDirective)))
-  await page.setRequestInterception(true)
   page.on('request',(request)=>{
-    const url=new URL(request.url())
-    if(url.hostname==='127.0.0.1'||url.protocol==='data:')void request.continue()
-    else{outbound.push(url.origin);void request.abort()}
+    if(!fixtureRequestAllowed(request.url(),fixtureOrigins))outbound.push('UNEXPECTED_HTTP_ENDPOINT')
   })
   page.on('response',(response)=>{const url=new URL(response.url());if(url.origin===origin&&url.pathname.endsWith('.js'))scripts.add(url.pathname)})
   signalEvidence=await browserSignalEvidence(browser.process()?.pid,()=>browserSession.send('SystemInfo.getProcessInfo'))
@@ -176,7 +176,7 @@ afterAll(async()=>{
   }
   const report={mode:'isolated read-only production bundle',network:'devnet',sourceCommit:execFileSync('git',['rev-parse','HEAD']).toString().trim(),
     sourceTree:execFileSync('git',['rev-parse','HEAD^{tree}']).toString().trim(),lockfileHash:sha(fs.readFileSync('package-lock.json')),
-    sourceDirty:execFileSync('git',['status','--porcelain']).toString().trim().length>0,browserVersion,browserRevision,browserProcessDiagnostics,browserTerminationDiagnostics,browserMemoryDiagnostics,browserStderrDiagnostics,browserSignalDiagnostics,ownedBrowserState,browserCloseStatus,errors:errorSnapshot,outbound:outboundSnapshot,violations:violationSnapshot,
+    sourceDirty:execFileSync('git',['status','--porcelain']).toString().trim().length>0,browserVersion,browserRevision,browserProcessDiagnostics,browserTerminationDiagnostics,browserMemoryDiagnostics,browserStderrDiagnostics,browserSignalDiagnostics,ownedBrowserState,browserCloseStatus,networkPolicy:{mode:'DIRECT_NETWORK_DEFAULT_BLOCK_AND_FIXTURE_CONNECT_HEADER',fetchInterception:false,origins:fixtureOrigins},errors:errorSnapshot,outbound:outboundSnapshot,violations:violationSnapshot,
     initialScripts:initialScripts.map((name)=>{const bytes=fs.readFileSync(path.join(outDir,name));return {name,bytes:bytes.length,gzipBytes:gzipSync(bytes).length,sha256:sha(bytes)}}),loadedScriptNames,noticeEvidence,socketEvidence:socketSnapshot,transportEvidence,nativeDiagnostics}
   fs.mkdirSync('.browser-results',{recursive:true});fs.writeFileSync('.browser-results/built-report.json',JSON.stringify(report,null,2)+'\n')
   await new Promise<void>((resolve)=>server?.httpServer.close(()=>resolve())??resolve())

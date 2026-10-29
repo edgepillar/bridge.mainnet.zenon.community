@@ -61,6 +61,8 @@ def classify_message(raw):
               'methods': []}
     if text in ['Frame too large', 'Received bad user message: Frame too large']:
         result['category'] = 'WEBSOCKET_FRAME_TOO_LARGE'
+    if text in ['DevTools: Duplicate request ID', 'Received bad user message: DevTools: Duplicate request ID']:
+        result['category'] = 'DEVTOOLS_DUPLICATE_REQUEST_ID'
     result['validation'] = sorted(x for x in VALIDATION if re.search(r'(?<![A-Z_])'+x+r'(?![A-Z_])', text))
     result['interfaces'] = sorted(x for x in INTERFACES if re.search(r'(?<![A-Za-z0-9_.])'+re.escape(x)+r'(?![A-Za-z0-9_])', text))
     result['methods'] = sorted(x for x in METHODS if re.search(r'(?<![A-Za-z0-9_])'+x+r'(?![A-Za-z0-9_])', text))
