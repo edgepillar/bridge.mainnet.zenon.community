@@ -21,6 +21,38 @@ export function unwrapReceive(amount: bigint, affiliateBonus: boolean): bigint {
   return affiliateBonus ? amount + amount / 100n : amount
 }
 
+/** The smallest wrap that delivers at least `target` after the fee. */
+export function wrapAmountFor(target: bigint, feePercentage: number): bigint {
+  const keep = FEE_DENOMINATOR - BigInt(feePercentage)
+  if (target <= 0n || keep <= 0n) return 0n
+  let a = (target * FEE_DENOMINATOR + keep - 1n) / keep
+  while (a > 0n && wrapReceive(a - 1n, feePercentage) >= target) a--
+  while (wrapReceive(a, feePercentage) < target) a++
+  return a
+}
+
+/**
+ * Of the amounts from `amount` up that deliver exactly what it delivers, the
+ * one with the most trailing zeros: 2 rather than 1.99999999 for 1.94 after a
+ * 3% fee rounded down. It costs at most a few base units, all of them fee.
+ */
+export function roundestAmount(amount: bigint, receive: (amount: bigint) => bigint): bigint {
+  const zeros = (v: bigint) => { let n = 0; while (v > 0n && v % 10n === 0n) { v /= 10n; n++ } return n }
+  const r = receive(amount)
+  let best = amount
+  for (let x = amount + 1n; x - amount <= 1000n && receive(x) === r; x++) if (zeros(x) > zeros(best)) best = x
+  return best
+}
+
+/** The smallest unwrap that delivers at least `target`, bonus included. */
+export function unwrapAmountFor(target: bigint, affiliateBonus: boolean): bigint {
+  if (target <= 0n) return 0n
+  let a = affiliateBonus ? (target * 100n) / 101n : target
+  while (a > 0n && unwrapReceive(a - 1n, affiliateBonus) >= target) a--
+  while (unwrapReceive(a, affiliateBonus) < target) a++
+  return a
+}
+
 export interface TimeEstimate {
   /** Seconds until the request can be redeemed, best case. */
   seconds: number

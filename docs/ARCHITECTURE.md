@@ -272,6 +272,18 @@ bridge's half hour), the recipient is an EVM address and can still be a custom
 one, the bridge-down block does not apply, and the details list the route, the
 minimum received and the fee in dollars.
 
+Either amount can be typed. Typing the amount to receive fills in the amount
+to send. On a bridge leg that is the fee or bonus worked backwards: the
+smallest amount that delivers it, moved to the roundest amount that delivers
+the same (2 rather than 1.99999999 for 1.94 after 3%). The routers only price
+an input, so a swap prices a first guess (the rate of the last quote for the
+pair, else dollar prices, else one whole token), scales the input by the rate
+that comes back and asks again, at most four times, until the output covers
+the typed amount by no more than 0.1%. Inputs are rounded up to six
+significant digits. That last quote is the one shown and sent; it is not
+asked for again when its input lands in the amount box. It usually takes two
+quotes.
+
 Limits. The quote is asked for when an input settles, not on a timer: the
 routers are unkeyed and rate limited (LI.FI allows 75 quotes per two hours).
 An Across quote is good for about half a minute, so it is usually asked for

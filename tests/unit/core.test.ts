@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { wrapFee, wrapReceive, unwrapReceive, wrapEstimate } from '../../src/core/fees.ts'
+import { wrapFee, wrapReceive, unwrapReceive, wrapAmountFor, unwrapAmountFor, roundestAmount, wrapEstimate } from '../../src/core/fees.ts'
 import { formatUnits, parseUnits, unitsToInput, duration, clock, shorten } from '../../src/core/format.ts'
 import { wrapStatus, wrapStateFromRevert, unwrapStatus, UINT256_MAX, isAffiliateEntry } from '../../src/core/status.ts'
 import { requestPlasma, canRequest, hasNoPlasma } from '../../src/core/plasmaBot.ts'
@@ -19,6 +19,26 @@ describe('fees', () => {
   it('pays 1% extra on unwrap with a referral', () => {
     expect(unwrapReceive(1000n, true)).toBe(1010n)
     expect(unwrapReceive(1000n, false)).toBe(1000n)
+  })
+  it('works back from the amount to receive to the smallest amount that delivers it', () => {
+    for (const target of [1n, 97n, 100n, 97_000_000n, 1_940_000_000n, 299953212506n - 8998596375n]) {
+      for (const fee of [0, 1, 300, 9999]) {
+        const a = wrapAmountFor(target, fee)
+        expect(wrapReceive(a, fee)).toBeGreaterThanOrEqual(target)
+        expect(wrapReceive(a - 1n, fee)).toBeLessThan(target)
+      }
+      for (const bonus of [true, false]) {
+        const a = unwrapAmountFor(target, bonus)
+        expect(unwrapReceive(a, bonus)).toBeGreaterThanOrEqual(target)
+        expect(unwrapReceive(a - 1n, bonus)).toBeLessThan(target)
+      }
+    }
+    expect(wrapAmountFor(97_000_000n, 300)).toBe(99_999_999n)
+    expect(unwrapAmountFor(1010n, true)).toBe(1000n)
+    expect(roundestAmount(99_999_999n, (a) => wrapReceive(a, 300))).toBe(100_000_000n)
+    expect(roundestAmount(1000n, (a) => unwrapReceive(a, true))).toBe(1000n)
+    expect(wrapAmountFor(0n, 300)).toBe(0n)
+    expect(wrapAmountFor(5n, 10_000)).toBe(0n)
   })
   it('estimates wrap time from finality, signing and the EVM delay', () => {
     expect(wrapEstimate({ confirmationsToFinality: 90, momentumSeconds: 10, evmRedeemDelayBlocks: 150, evmBlockSeconds: 12, signingSeconds: 0 }).seconds).toBe(900 + 1800)

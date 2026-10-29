@@ -287,6 +287,8 @@ async function json(res: Response): Promise<ApiBody | null> {
   } finally { reader.releaseLock() }
 }
 
+export const requestKey = (q: QuoteRequest) => [assetKey(q.from), assetKey(q.to), q.amount, q.fromAddress, q.toAddress].join('|')
+
 const safely = (f: () => Promise<QuoteResult>): Promise<QuoteResult> =>
   f().catch((err) => ({ ok: false, message: err instanceof Error ? err.message : String(err) }))
 
@@ -299,6 +301,59 @@ export async function fetchQuote(c: SwapConfig, q: QuoteRequest, fetcher: typeof
   // An answer that failed a check is not replaced by another router's: it is shown.
   if (a.message.startsWith('Quote ')) return a
   return safely(() => quoteLifi(c, q, fetcher))
+}
+
+/**
+ * A first input for `target` of the other asset: by the rate of a quote for
+ * the same pair, else by dollar prices, else one whole token to learn the rate.
+ */
+export function inputGuess(from: SwapAsset, to: SwapAsset, target: bigint, sample: Quote | null, fromUsd: number | null, toUsd: number | null): bigint {
+  if (target <= 0n) return 0n
+  if (sample && sameAsset(sample.request.from, from) && sameAsset(sample.request.to, to) && sample.toAmount > 0n) {
+    return (target * sample.request.amount + sample.toAmount - 1n) / sample.toAmount
+  }
+  if (fromUsd && toUsd) {
+    const tokens = usdValue(target, to.decimals, toUsd) / fromUsd
+    const shift = Math.min(from.decimals, 12)
+    const scaled = Math.ceil(tokens * 10 ** shift)
+    if (Number.isFinite(scaled) && scaled > 0 && scaled < Number.MAX_SAFE_INTEGER) return BigInt(scaled) * 10n ** BigInt(from.decimals - shift)
+  }
+  return 10n ** BigInt(from.decimals)
+}
+
+function roundUp(v: bigint, digits = 6): bigint {
+  const length = v.toString().length
+  if (length <= digits) return v
+  const step = 10n ** BigInt(length - digits)
+  return ((v + step - 1n) / step) * step
+}
+
+/**
+ * The quote for the input that buys `target`. Routers only price a given
+ * input, so this prices `guess`, scales the input by the rate that came back
+ * and asks again, at most four times. It stops once the output covers the
+ * target by no more than a tenth of a percent; a step that fell short adds a
+ * tenth of a percent, because the rate moves with the size of the trade.
+ * Each input is rounded up to six significant digits, so the amount box
+ * reads 0.0812751 and not eighteen decimals.
+ */
+export async function quoteForOutput(c: SwapConfig, q: Omit<QuoteRequest, 'amount'>, target: bigint, guess: bigint, fetcher: typeof fetch = fetch): Promise<QuoteResult> {
+  if (target <= 0n || guess <= 0n) return { ok: false, message: 'No route' }
+  let amount = roundUp(guess)
+  let last: QuoteResult = { ok: false, message: 'No route' }
+  for (let round = 0; round < 4; round++) {
+    const r = await fetchQuote(c, { ...q, amount }, fetcher)
+    if (!r.ok) return r
+    last = r
+    const out = r.quote.toAmount
+    if (out >= target && (out - target) * 1000n <= target) break
+    let next = (amount * target + out - 1n) / out
+    if (out < target) next += next / 1000n + 1n
+    next = roundUp(next)
+    if (next === amount) break
+    amount = next
+  }
+  return last
 }
 
 export type SwapState = 'pending' | 'done' | 'failed'

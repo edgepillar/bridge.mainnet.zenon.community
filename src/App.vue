@@ -41,6 +41,42 @@ watch(
 const noticeHidden = ref(false)
 // Closing the bridge banner holds until the bridge's state changes or the page is loaded again. The chip in the header stays.
 const downHidden = ref(false)
+
+// A banner that comes or goes opens or closes its own height, gap included,
+// in step with the page fade. Removed at once, it moved everything under it
+// by its height in one frame (the stalled banner leaving for Status).
+const BANNER_GAP = 8
+const BANNER_SIZE = ['height', 'paddingTop', 'paddingBottom', 'borderTopWidth', 'borderBottomWidth', 'marginTop', 'opacity', 'overflow', 'transition'] as const
+function bannerShut(s: CSSStyleDeclaration) {
+  s.height = '0px'
+  s.paddingTop = s.paddingBottom = s.borderTopWidth = s.borderBottomWidth = '0px'
+  s.marginTop = `-${BANNER_GAP}px`
+  s.opacity = '0'
+}
+function bannerAnimate(el: Element, open: boolean, done: () => void) {
+  const e = el as HTMLElement, s = e.style
+  const height = e.offsetHeight
+  s.overflow = 'hidden'
+  if (open) bannerShut(s)
+  else s.height = `${height}px`
+  void e.offsetHeight
+  s.transition = ['height', 'padding', 'border-width', 'margin-top', 'opacity'].map((p) => `${p} 180ms var(--ease)`).join(', ')
+  if (open) {
+    s.height = `${height}px`
+    for (const k of ['paddingTop', 'paddingBottom', 'borderTopWidth', 'borderBottomWidth', 'marginTop', 'opacity'] as const) s[k] = ''
+  } else bannerShut(s)
+  let finished = false
+  const finish = () => {
+    if (finished) return
+    finished = true
+    if (open) for (const k of BANNER_SIZE) s[k] = ''
+    done()
+  }
+  e.addEventListener('transitionend', (ev) => ev.target === e && ev.propertyName === 'height' && finish())
+  setTimeout(finish, 260)
+}
+const bannerEnter = (el: Element, done: () => void) => bannerAnimate(el, true, done)
+const bannerLeave = (el: Element, done: () => void) => bannerAnimate(el, false, done)
 watch(
   () => bridge.health?.state,
   () => (downHidden.value = false),
@@ -121,20 +157,20 @@ const status = computed(() => {
       </div>
     </header>
 
-    <div class="mx-auto mt-2 grid w-full max-w-[640px] grid-cols-1 gap-2 px-4">
-      <Banner v-if="swapping && swapMessage" tone="danger">
+    <TransitionGroup tag="div" class="mx-auto mt-2 grid w-full max-w-[640px] grid-cols-1 gap-2 px-4" :css="false" @enter="bannerEnter" @leave="bannerLeave">
+      <Banner v-if="swapping && swapMessage" key="swap" tone="danger">
         <strong>Swaps are unavailable.</strong> {{ swapMessage }}
       </Banner>
-      <Banner v-if="downBanner && route !== 'stats' && !swapping && !downHidden" tone="danger" dismissable data-testid="down-banner" @dismiss="downHidden = true">
+      <Banner v-if="downBanner && route !== 'stats' && !swapping && !downHidden" key="down" tone="danger" dismissable data-testid="down-banner" @dismiss="downHidden = true">
         <strong>{{ downBanner.title }}</strong> {{ downBanner.body }}
       </Banner>
-      <Banner v-if="syrius.app && syrius.address && syrius.chainId === null" tone="wait" data-testid="app-network">
+      <Banner v-if="syrius.app && syrius.address && syrius.chainId === null" key="app-network" tone="wait" data-testid="app-network">
         Check the network Syrius is on.
         <template #action>
           <button class="btn btn-sm -my-1" @click="checkSyriusNetwork">Check network</button>
         </template>
       </Banner>
-      <Banner v-else-if="wrongZenonChain()" tone="wait">
+      <Banner v-else-if="wrongZenonChain()" key="wrong-chain" tone="wait">
         <span class="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
           <span>Syrius</span><span class="chip chip-dim mono">{{ zenonNetworkName(syrius.chainId!) }} {{ syrius.chainId }}</span>
           <span>Page</span><span class="chip chip-dim mono">{{ networkLabel() }} {{ chainId() }}</span>
@@ -144,13 +180,13 @@ const status = computed(() => {
           <button v-else class="btn btn-sm -my-1" data-testid="use-wallet-node" :disabled="walletNode.checking" @click="requestWalletNode">Use Syrius node</button>
         </template>
       </Banner>
-      <Banner v-if="walletNode.problem" tone="warn" dismissable @dismiss="walletNode.problem = ''">{{ walletNode.problem }}.</Banner>
-      <Banner v-if="node.notice && !noticeHidden" tone="wait" dismissable @dismiss="noticeHidden = true">{{ node.notice }}</Banner>
-      <Banner v-if="referrer" tone="new">
+      <Banner v-if="walletNode.problem" key="node-problem" tone="warn" dismissable @dismiss="walletNode.problem = ''">{{ walletNode.problem }}.</Banner>
+      <Banner v-if="node.notice && !noticeHidden" key="notice" tone="wait" dismissable @dismiss="noticeHidden = true">{{ node.notice }}</Banner>
+      <Banner v-if="referrer" key="referrer" tone="new">
         Referral from <Address :value="referrer" :copy="false" class="text-fg" />
         <template #action><button class="btn btn-ghost btn-sm -my-1 !text-inherit" @click="clearReferral">Clear</button></template>
       </Banner>
-    </div>
+    </TransitionGroup>
 
     <main class="mx-auto w-full max-w-6xl flex-1 px-4 pt-6 pb-28 md:px-8 md:pb-16">
       <Transition name="fade" mode="out-in">

@@ -6,7 +6,9 @@ import {
   fetchPrice,
   fetchQuote,
   fetchStatus,
+  inputGuess,
   isNative,
+  quoteForOutput,
   kyberRouteUrl,
   lifiUrl,
   parseAcross,
@@ -193,6 +195,51 @@ describe('swap routing', () => {
     expect(await fetchQuote(cfg, req({ to: bnb }), as(limited))).toEqual({ ok: false, message: 'Too many quotes. Try again later.' })
     const none = respond({ kyberswap: { status: 400, body: {} }, 'li.quest': { status: 404, body: { message: 'x' } } })
     expect(await fetchQuote(cfg, req(), as(none))).toEqual({ ok: false, message: 'No route' })
+  })
+})
+
+describe('swap by the amount to receive', () => {
+  // A KyberSwap that pays `rate` wZNN units per input unit, less a price impact that grows with size.
+  const pool = (rate: (amountIn: bigint) => bigint) => {
+    let amountIn = 0n
+    return vi.fn(async (url: string) => {
+      if (String(url).includes('/routes?')) {
+        amountIn = BigInt(new URL(String(url)).searchParams.get('amountIn')!)
+        return new Response(JSON.stringify({ data: { routeSummary: { amountIn: String(amountIn) } } }))
+      }
+      return new Response(JSON.stringify({ data: { amountOut: String(rate(amountIn)), data: '0xe21fd0e9', routerAddress: cfg.kyber.router, transactionValue: '0' } }))
+    })
+  }
+  const impact = (amountIn: bigint) => (amountIn * 3n) - (amountIn * amountIn) / 10n ** 12n
+  const base = { from: wznn, to: { ...wznn, address: '0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599', symbol: 'WBTC' }, fromAddress: me, toAddress: me }
+
+  it('settles on an input whose output covers the target by at most a tenth of a percent', async () => {
+    const f = pool(impact)
+    const target = 1_000_000_000n
+    const r = await quoteForOutput(cfg, base, target, inputGuess(base.from, base.to, target, null, null, null), as(f))
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.quote.toAmount).toBeGreaterThanOrEqual(target)
+    expect((r.quote.toAmount - target) * 1000n).toBeLessThanOrEqual(target)
+    expect(r.quote.toAmount).toBe(impact(r.quote.request.amount))
+    expect(r.quote.request.amount.toString().replace(/0+$/, '').length).toBeLessThanOrEqual(6)
+    expect(f.mock.calls.length).toBeLessThanOrEqual(8)
+  })
+  it('passes a router failure through and refuses nothing to buy', async () => {
+    const none = respond({ kyberswap: { status: 400, body: {} }, 'li.quest': { status: 404, body: { message: 'x' } } })
+    expect(await quoteForOutput(cfg, base, 10n, 10n, as(none))).toEqual({ ok: false, message: 'No route' })
+    const f = pool(impact)
+    expect(await quoteForOutput(cfg, base, 0n, 10n, as(f))).toEqual({ ok: false, message: 'No route' })
+    expect(f).not.toHaveBeenCalled()
+  })
+  it('guesses from a quote for the same pair, then from prices, then with one whole token', async () => {
+    const f = pool((a) => a * 2n)
+    const r = await fetchQuote(cfg, { ...base, amount: 500n }, as(f))
+    if (!r.ok) throw new Error(r.message)
+    expect(inputGuess(base.from, base.to, 1001n, r.quote, null, null)).toBe(501n)
+    expect(inputGuess(base.to, base.from, 1001n, r.quote, null, null)).toBe(10n ** 8n)
+    expect(inputGuess(eth, wznn, 100n * 10n ** 8n, null, 2000, 0.5)).toBe(25n * 10n ** 15n)
+    expect(inputGuess(eth, wznn, 0n, null, 2000, 0.5)).toBe(0n)
   })
 })
 

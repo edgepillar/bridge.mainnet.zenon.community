@@ -36,17 +36,17 @@ import { isEvmRecipient } from '../core/recipient.ts'
 import { operations, unresolvedOperation } from '../state/operations.ts'
 import { submitTransaction, successfulReceipt, transactionPayload } from '../evm/transactions.ts'
 import { parseUnits, unitsToInput, duration, formatUnits, formatUsd, shorten } from '../core/format.ts'
-import { wrapFee, wrapReceive, unwrapReceive, wrapEstimate, unwrapEstimate, LOW_PLASMA } from '../core/fees.ts'
+import { wrapFee, wrapReceive, unwrapReceive, wrapAmountFor, unwrapAmountFor, roundestAmount, wrapEstimate, unwrapEstimate, LOW_PLASMA } from '../core/fees.ts'
 import { usableReferrer, recipientString } from '../core/referral.ts'
 import { requestPlasma } from '../core/plasmaBot.ts'
-import { NATIVE, assetKey, fetchPrice, fetchQuote, fetchStatus, isNative, sameAsset, swapEstimate, usdValue, type Provider, type Quote, type SwapAsset } from '../core/swap.ts'
+import { NATIVE, assetKey, fetchPrice, fetchQuote, fetchStatus, inputGuess, isNative, quoteForOutput, requestKey, sameAsset, swapEstimate, usdValue, type Provider, type Quote, type SwapAsset } from '../core/swap.ts'
 import { watchAsset } from '../wallet/eip6963.ts'
 import { config, evmChain, evmTxUrl } from '../config.ts'
 
 type Dir = 'wrap' | 'unwrap' | 'swap'
 const dir = ref<Dir>('wrap')
 let mounted = true
-onUnmounted(() => { mounted = false; balanceRequest++; recipientRequest++; quoteSeq++; clearTimeout(quoteTimer) })
+onUnmounted(() => { mounted = false; balanceRequest++; recipientRequest++; quoteSeq++; solveSeq++; clearTimeout(quoteTimer); clearTimeout(solveTimer) })
 const chainId = ref<number | null>(null)
 const routeKey = ref<string>('')
 const swapFrom = ref<SwapAsset | null>(null)
@@ -335,6 +335,7 @@ watch(dir, (_n, old) => {
   editingRecipient.value = false
   recipientText.value = ''
   amountText.value = ''
+  stopReceiveEdit()
 })
 
 let recipientRequest = 0
@@ -364,19 +365,21 @@ const quoteRequest = computed(() => {
 })
 let quoteSeq = 0
 let quoteTimer: ReturnType<typeof setTimeout> | undefined
+// A quote found by working back from the receive amount is used as it is,
+// not asked for again when its input lands in the amount box.
+let seeded: { key: string; quote: Quote } | null = null
 watch(
-  () => {
-    const q = quoteRequest.value
-    return q ? [assetKey(q.from), assetKey(q.to), q.amount, q.fromAddress, q.toAddress].join('|') : ''
-  },
-  () => {
+  () => (quoteRequest.value ? requestKey(quoteRequest.value) : ''),
+  (key) => {
     clearTimeout(quoteTimer)
     const seq = ++quoteSeq
-    quote.value = null
+    const seed = seeded?.key === key ? seeded.quote : null
+    seeded = null
+    quote.value = seed
     quoteError.value = ''
     const req = quoteRequest.value
     if (!req) return
-    scheduleQuote(req, seq, 700)
+    scheduleQuote(req, seq, seed ? Math.max(5000, seed.expires - Date.now() - 10_000) : 700)
   },
 )
 // A quote lapses. The next one is fetched before it does, so the button never
@@ -414,6 +417,69 @@ const receive = computed(() => {
   if (!amount.value || !route.value) return 0n
   return dir.value === 'wrap' ? wrapReceive(amount.value, route.value.pair.feePercentage) : unwrapReceive(amount.value, bonus.value)
 })
+// Typing what should arrive fills in what to send. A bridge leg is arithmetic;
+// a swap is worked out from router quotes, which only price an input. The box
+// keeps what was typed while it has focus and shows the quoted amount after.
+const receiveText = ref('')
+const editingReceive = ref(false)
+const solving = ref(false)
+const solveError = ref('')
+let solveSeq = 0
+let solveTimer: ReturnType<typeof setTimeout> | undefined
+const receiveShown = computed(() => (editingReceive.value ? receiveText.value : receive.value ? formatUnits(receive.value, dstDecimals.value) : ''))
+function stopReceiveEdit() {
+  clearTimeout(solveTimer)
+  solveSeq++
+  editingReceive.value = false
+  solving.value = false
+  solveError.value = ''
+}
+function onAmountInput() {
+  if (editingReceive.value || solving.value || solveError.value) stopReceiveEdit()
+}
+function onReceiveFocus() {
+  if (busy.value) return
+  receiveText.value = receive.value ? unitsToInput(receive.value, dstDecimals.value) : ''
+  editingReceive.value = true
+}
+function onReceiveInput(e: Event) {
+  receiveText.value = (e.target as HTMLInputElement).value
+  editingReceive.value = true
+  const target = parseUnits(receiveText.value, dstDecimals.value)
+  clearTimeout(solveTimer)
+  const seq = ++solveSeq
+  solveError.value = ''
+  solving.value = false
+  if (!target) return void (amountText.value = '')
+  if (dir.value !== 'swap') {
+    const r = route.value
+    if (!r) return
+    const fee = r.pair.feePercentage, extra = bonus.value
+    const send = dir.value === 'wrap'
+      ? roundestAmount(wrapAmountFor(target, fee), (a) => wrapReceive(a, fee))
+      : roundestAmount(unwrapAmountFor(target, extra), (a) => unwrapReceive(a, extra))
+    amountText.value = unitsToInput(send, decimals.value)
+    return
+  }
+  const from = swapFrom.value, to = swapTo.value
+  if (!config.swap || !from || !to) return
+  solving.value = true
+  solveTimer = setTimeout(async () => {
+    const fromAddress = evm.account ?? NO_ACCOUNT
+    const base = { from, to, fromAddress, toAddress: recipientValid.value ? recipient.value : fromAddress }
+    const r = await quoteForOutput(config.swap!, base, target, inputGuess(from, to, target, quote.value, srcPrice.value, dstPrice.value))
+    if (!mounted || seq !== solveSeq) return
+    solving.value = false
+    if (!r.ok) {
+      amountText.value = ''
+      solveError.value = r.message !== 'No route' && r.message.length <= 40 ? r.message : 'No route found'
+      return
+    }
+    seeded = { key: requestKey(r.quote.request), quote: r.quote }
+    amountText.value = unitsToInput(r.quote.request.amount, decimals.value)
+  }, 700)
+}
+
 const estimate = computed(() => {
   if (dir.value === 'swap') {
     return swapFrom.value && swapTo.value ? swapEstimate(swapFrom.value, swapTo.value, evmNet.value?.blockTime ?? 12, quote.value) : null
@@ -513,7 +579,8 @@ const blocker = computed<string>(() => {
   if (dir.value === 'wrap' && wrongZenonChain()) return 'Syrius is on another chain'
   if (dir.value !== 'wrap' && !evm.account) return 'Connect EVM wallet'
   if (dir.value !== 'wrap' && evm.chainId !== chainId.value) return `Switch to ${net.value?.name}`
-  if (!amountText.value) return 'Enter an amount'
+  if (solving.value) return 'Getting quote'
+  if (!amountText.value) return solveError.value || 'Enter an amount'
   if (amount.value === null) return 'Invalid amount'
   if (amount.value === 0n) return 'Enter an amount'
   if (amount.value < min.value) return `Minimum ${formatUnits(min.value, decimals.value)} ${srcSymbol.value}`
@@ -794,7 +861,7 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
         <span class="chevron"><ChevronDown :size="16" /></span>
       </button>
       <div class="mt-4 flex items-center gap-3">
-        <input v-model="amountText" :disabled="busy" class="amount-input mono w-0 min-w-0 flex-1" inputmode="decimal" placeholder="0" aria-label="Amount" autocomplete="off" />
+        <input v-model="amountText" :disabled="busy" class="amount-input mono w-0 min-w-0 flex-1" inputmode="decimal" placeholder="0" aria-label="Amount" autocomplete="off" @input="onAmountInput" />
         <button class="max-btn" :disabled="busy" @click="setMax">Max</button>
       </div>
       <div class="mt-1 flex h-5 items-center justify-between text-sm text-dim">
@@ -818,8 +885,21 @@ const busy = computed(() => sending.value || approving.value || syrius.busy || e
         </span>
         <span class="chevron"><ChevronDown :size="16" /></span>
       </button>
-      <div data-testid="bridge-receive" class="mono mt-4 truncate text-[30px] leading-[1.25]" :class="receive ? 'text-fg' : 'text-dim'">
-        {{ receive ? formatUnits(receive, dstDecimals) : '0' }}
+      <div class="mt-4 flex items-center gap-3">
+        <input
+          data-testid="bridge-receive"
+          :value="receiveShown"
+          :disabled="busy"
+          class="amount-input mono w-0 min-w-0 flex-1"
+          inputmode="decimal"
+          placeholder="0"
+          aria-label="Receive amount"
+          autocomplete="off"
+          @focus="onReceiveFocus"
+          @input="onReceiveInput"
+          @blur="editingReceive = false"
+        />
+        <Loader2 v-if="solving" :size="18" class="spin shrink-0 text-dim" />
       </div>
       <div class="mt-1 flex h-5 items-center gap-1.5 text-sm text-dim">
         <template v-if="recipient">
