@@ -8,6 +8,7 @@ import { createServer } from 'vite'
 import {directNetworkPolicy,fixtureConnectPolicy,fixtureRequestAllowed} from '../../e2e/lib/browser-network-policy.mjs'
 if (!process.env.CHROME_PATH) throw new Error('Set CHROME_PATH to a compatible Chromium executable')
 let browser,page
+const heading={'':'Bridge',activity:'Activity',liquidity:'Liquidity',stats:'Status',affiliate:'Referral'}
 const fixtureOrigins=['http://127.0.0.1:5195','ws://127.0.0.1:5195']
 const server = await createServer({ envDir: false, cacheDir: process.env.QUALIFICATION_CACHE_DIR,
   plugins:[{name:'owned-fixture-routes',configureServer(vite){vite.middlewares.use(async(request,response,next)=>{
@@ -60,7 +61,7 @@ try {
       await page.setViewport({ width, height: 900 })
       for (const route of ['', 'activity', 'liquidity', 'stats', 'affiliate']) {
         await page.evaluate((v) => { location.hash = '#/' + v }, route)
-        await page.waitForFunction((v) => document.querySelector('h1')?.textContent?.trim() === v, {}, route ? route[0].toUpperCase() + route.slice(1) : 'Bridge')
+        await page.waitForFunction((v) => document.querySelector('h1')?.textContent?.trim() === v, {}, heading[route])
         const size = await page.evaluate(() => ({ width: innerWidth, scrollWidth: document.documentElement.scrollWidth }))
         assert(size.scrollWidth <= size.width, `Overflow: ${theme}/${width}/${route || 'bridge'}`)
         report.checks.push({ name: 'responsive layout', theme, route: route || 'bridge', ...size })
@@ -78,7 +79,7 @@ try {
   await fresh(); await amount('2'); await page.evaluate(() => { window.__fixture.bridge.health.state = 'unknown' })
   assert((await action()).disabled)
   await page.evaluate(() => { location.hash = '#/stats' }); await page.waitForSelector('[data-testid="orchestrator-state"]')
-  assert(!(await page.evaluate(() => document.querySelector('main').textContent)).includes('Signing normally.')); check('unknown signing health blocks sends')
+  assert(!(await page.evaluate(() => document.querySelector('main').textContent)).includes('Signing recently.')); check('unknown signing health blocks sends')
   await fresh(); await amount('2'); await page.evaluate(() => { window.__fixture.knobs.delayWallet = true })
   await page.click('[data-testid="bridge-action"]'); await page.waitForFunction(() => window.__fixture.sent.length === 1)
   assert(await page.$eval('input[aria-label="Amount"]', (e) => e.disabled), 'Amount must be frozen during wallet approval')
@@ -134,7 +135,7 @@ try {
   })
   assert.match(await attempt(), /Another tab/)
   await page.evaluate(async () => { window.__fixture.releaseOwned(); await window.__fixture.ownership })
-  assert.match(await attempt(), /unresolved/);await second.close();check('real cross-tab Web Lock and durable ownership prevent a second wallet invocation')
+  assert.match(await attempt(), /unconfirmed/);await second.close();check('real cross-tab Web Lock and durable ownership prevent a second wallet invocation')
   const landing = await browser.newPage()
   const landingNetwork=await landing.createCDPSession();await landingNetwork.send('Network.enable');await landingNetwork.send('Network.setBlockedURLs',directNetworkPolicy(fixtureOrigins))
   await landing.setExtraHTTPHeaders({'X-Owned-Landing':'1'})
@@ -198,8 +199,9 @@ try {
     f.ownedReviewRequest = f.journalSubmission({ source: 'evm', chainId: 1, account: '0x'+'56'.repeat(20), kind: 'review-lock-fixture', payload: JSON.stringify({ to: '0x'+'34'.repeat(20), data: '0x1234', value: '0' }) }, () => {}, () => new Promise((resolve) => { f.releaseReviewRequest = () => resolve('0x'+'cd'.repeat(32)) }))
   })
   await reviewerPeer.waitForFunction(() => !!window.__fixture.releaseReviewRequest)
+  await page.bringToFront()
   await page.click('[data-testid="hashless-review-ack"]'); await page.click('[data-testid="hashless-review-action"]')
-  await page.waitForFunction(() => document.body.textContent.includes('Another tab still owns'))
+  await page.waitForFunction(() => document.body.textContent.includes('Another tab is sending'))
   assert.equal(await page.evaluate(() => window.__fixture.operations.entries.find((r) => r.id === 'hashless-browser-fixture').reviewedAt), undefined)
   await reviewerPeer.evaluate(async () => { window.__fixture.releaseReviewRequest(); await window.__fixture.ownedReviewRequest }); await reviewerPeer.close()
   await page.click('[data-testid="hashless-review-action"]')
@@ -271,7 +273,7 @@ try {
     await page.setViewport({width,height:900});await page.evaluate((v)=>document.documentElement.setAttribute('data-theme',v),theme)
     for(const route of ['','activity','liquidity','stats','affiliate']) {
       await page.evaluate((v)=>{location.hash='#/'+v},route)
-      await page.waitForFunction((v)=>document.querySelector('h1')?.textContent?.trim()===v,{},route?route[0].toUpperCase()+route.slice(1):'Bridge')
+      await page.waitForFunction((v)=>document.querySelector('h1')?.textContent?.trim()===v,{},heading[route])
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth-innerWidth),0)
       report.checks.push({name:'responsive layout with disconnected wallets',theme,width,route:route||'bridge'})
     }
