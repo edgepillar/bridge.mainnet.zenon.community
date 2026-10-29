@@ -1,9 +1,10 @@
 <script setup lang="ts">
 // One button for both wallets: Syrius for Zenon, any EIP-6963 wallet for EVM.
 // The menu behind it holds each wallet's address and its controls, and, one
-// level further in, which node the page reads from.
+// level further in, which node the page reads from: the default, Syrius's, or
+// one the user adds.
 import { computed, ref, watch } from 'vue'
-import { Wallet, LogOut, Repeat, Download, Loader2, ChevronDown, Server } from '@lucide/vue'
+import { Wallet, LogOut, Repeat, Download, Loader2, ChevronDown, Server, Check, X } from '@lucide/vue'
 import Modal from './Modal.vue'
 import Address from './Address.vue'
 import TokenIcon from './TokenIcon.vue'
@@ -21,9 +22,13 @@ import {
   confirmWalletNode,
   cancelWalletNode,
   useDefaultNode,
+  customNodes,
+  useCustomNode,
+  removeCustomNode,
+  SYRIUS_RELEASES,
 } from '../state/zenon.ts'
 import { evm, connectEvm, disconnectEvm } from '../state/evm.ts'
-import { evmChain, zenonNetworkName } from '../config.ts'
+import { config, evmChain, zenonNetworkName } from '../config.ts'
 import { shorten } from '../core/format.ts'
 import { toastError } from '../state/toasts.ts'
 import type { DiscoveredWallet } from '../wallet/eip6963.ts'
@@ -32,7 +37,7 @@ const open = ref(false)
 const nodeOpen = ref(false)
 
 async function onSyrius() {
-  if (!syrius.present) return window.open('https://github.com/DexterLabZ/syrius-extension/releases', '_blank', 'noopener')
+  if (!syrius.present && !syrius.app) return window.open(SYRIUS_RELEASES, '_blank', 'noopener')
   try {
     await connectSyrius()
   } catch (err) {
@@ -57,6 +62,12 @@ function openPicker() {
 function toggleNode() {
   if (node.source === 'wallet') useDefaultNode()
   else void requestWalletNode()
+}
+
+const nodeText = ref('')
+async function addNode() {
+  await useCustomNode(nodeText.value)
+  if (!customNodes.problem) nodeText.value = ''
 }
 // The confirmation is a dialog of its own; the menu steps aside for it.
 watch(
@@ -105,12 +116,13 @@ const label = computed(() => {
           <div class="min-w-0 flex-1">
             <div class="label">Zenon</div>
             <Address v-if="syrius.address" :value="syrius.address" class="text-sm" />
+            <div v-else-if="syrius.app" class="text-sm text-soft">Syrius app <a :href="SYRIUS_RELEASES" target="_blank" rel="noopener" class="link ml-1">Get</a></div>
             <div v-else class="text-sm text-soft">Syrius</div>
           </div>
           <button v-if="syrius.address" class="icon-btn sm" aria-label="Disconnect Syrius" @click="disconnectSyrius"><LogOut :size="15" /></button>
           <button v-else data-testid="wallet-zenon-connect" class="btn btn-sm" :disabled="syrius.busy" @click="onSyrius">
-            <Loader2 v-if="syrius.busy" :size="14" class="spin" /><Download v-else-if="!syrius.present" :size="14" />
-            {{ syrius.hold ? syrius.hold + 's' : syrius.present ? 'Connect' : 'Install' }}
+            <Loader2 v-if="syrius.busy" :size="14" class="spin" /><Download v-else-if="!syrius.present && !syrius.app" :size="14" />
+            {{ syrius.hold ? syrius.hold + 's' : syrius.present || syrius.app ? 'Connect' : 'Install' }}
           </button>
         </div>
 
@@ -136,13 +148,29 @@ const label = computed(() => {
           <ChevronDown :size="14" class="chev" :class="{ up: nodeOpen }" />
         </button>
         <div v-if="nodeOpen" class="slide-down px-2.5 pb-1">
-          <div class="mono truncate text-sm text-soft" :title="node.url">{{ hostOf(node.url) }}</div>
-          <button class="node-switch" data-testid="node-switch" :disabled="walletNode.checking || !syrius.address" @click="toggleNode">
+          <button class="node-pick" data-testid="node-default" :aria-pressed="node.source === 'default'" @click="useDefaultNode">
+            <span class="mono flex-1 truncate text-left" :title="config.defaultNode">{{ hostOf(config.defaultNode) }}</span>
+            <Check v-if="node.source === 'default'" :size="15" class="text-ok" />
+          </button>
+          <div v-for="n in customNodes.list" :key="n.url" class="flex items-center gap-1" data-testid="node-custom">
+            <button class="node-pick min-w-0 flex-1" :aria-pressed="node.source === 'custom' && node.url === n.url" :disabled="walletNode.checking" @click="useCustomNode(n.url)">
+              <span class="mono flex-1 truncate text-left" :title="n.url">{{ hostOf(n.url) }}</span>
+              <span v-if="n.chainId !== config.zenonChainId" class="chip chip-dim mono">{{ n.chainId }}</span>
+              <Check v-if="node.source === 'custom' && node.url === n.url" :size="15" class="text-ok" />
+            </button>
+            <button class="icon-btn sm" :aria-label="`Remove ${hostOf(n.url)}`" @click="removeCustomNode(n.url)"><X :size="15" /></button>
+          </div>
+          <button v-if="!syrius.app" class="node-switch" data-testid="node-switch" :disabled="walletNode.checking || !syrius.address" @click="toggleNode">
             <span class="flex-1 text-left">Use Syrius node</span>
-            <Loader2 v-if="walletNode.checking" :size="15" class="spin text-dim" />
             <span class="switch" role="switch" :aria-checked="node.source === 'wallet'" />
           </button>
-          <div v-if="walletNode.problem" class="pb-2 text-sm text-warn">{{ walletNode.problem }}</div>
+          <form class="flex gap-2 py-1" data-testid="node-add" @submit.prevent="addNode">
+            <input v-model="nodeText" class="field mono text-sm" placeholder="wss://" aria-label="Node address" spellcheck="false" autocomplete="off" autocapitalize="off" />
+            <button class="btn" :disabled="!nodeText.trim() || walletNode.checking">
+              <Loader2 v-if="walletNode.checking" :size="15" class="spin" /><template v-else>Add</template>
+            </button>
+          </form>
+          <div v-if="walletNode.problem || customNodes.problem" class="pb-2 text-sm text-warn" data-testid="node-problem">{{ customNodes.problem || walletNode.problem }}</div>
         </div>
       </div>
     </Transition>
@@ -160,7 +188,7 @@ const label = computed(() => {
               <div class="mono">{{ walletNode.pending.chainId }}</div>
             </div>
             <div class="min-w-0">
-              <div class="label">Syrius node</div>
+              <div class="label">{{ walletNode.pending.kind === 'custom' ? 'Node' : 'Syrius node' }}</div>
               <div class="mono truncate" :title="walletNode.pending.url">{{ hostOf(walletNode.pending.url) }}</div>
             </div>
           </div>
@@ -245,9 +273,23 @@ const label = computed(() => {
 .node-switch:hover:not(:disabled) {
   color: var(--fg);
 }
-.node-switch:disabled {
+.node-switch:disabled,
+.node-pick:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+.node-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  font-size: 14px;
+  color: var(--soft);
+}
+.node-pick:hover:not(:disabled),
+.node-pick[aria-pressed='true'] {
+  color: var(--fg);
 }
 .pick {
   display: flex;

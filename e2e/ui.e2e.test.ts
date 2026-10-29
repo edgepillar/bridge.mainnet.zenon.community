@@ -228,7 +228,7 @@ state: ${await page.evaluate(() => { const b = (window as any).__bridge; return 
 
   it('wraps 2 ZNN from the Bridge view, after the terms', async () => {
     await page.type('input[aria-label="Amount"]', '2')
-    await page.waitForFunction(() => document.querySelector('[data-testid="bridge-receive"]')?.textContent?.trim() === '1.94')
+    await page.waitForFunction(() => (document.querySelector('[data-testid="bridge-receive"]') as HTMLInputElement | null)?.value === '1.94')
     await page.waitForFunction(() => document.querySelector('[data-testid="bridge-action"]')?.textContent?.includes('Bridge to Anvil'))
     await click('[data-testid="bridge-action"]')
     await click('[data-testid="terms-all"]')

@@ -75,7 +75,7 @@ describe('Syrius original request boundaries', () => {
     p.sendAccountBlock.mockResolvedValue({ hash, block: [] })
     await expect(w.sendAccountBlock(template())).rejects.toMatchObject({ reportedHash: hash })
     p.sendAccountBlock.mockResolvedValue({ hash: 'not-a-hash' })
-    await expect(w.sendAccountBlock(template())).rejects.toThrow('unknown')
+    await expect(w.sendAccountBlock(template())).rejects.toThrow('No reply')
     expect(p.sendAccountBlock).toHaveBeenCalledTimes(3)
   })
   it('supports both response envelopes without letting a reported signed account change', async () => {

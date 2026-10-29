@@ -70,10 +70,33 @@ export function restoreOperations() {
     if (!Array.isArray(raw) || raw.length > 10_000 || !raw.every(valid)) throw new Error('Operation history is unreadable')
     operations.entries = raw.map((r) => ({ ...r, state: r.state === 'awaiting-wallet' ? 'unknown' : r.state }))
   } catch {
-    operations.error = 'Operation history is unavailable. Restore the original transaction evidence before sending again.'
+    operations.error = "Saved history can't be read. Sending is paused."
   }
 }
 restoreOperations()
+
+/** The stored journal as it is, for the user to keep before a reset. */
+export function rawJournal(): string {
+  try { return localStorage.getItem(KEY) ?? '' } catch { return '' }
+}
+
+/**
+ * Drops a journal that cannot be read, and only such a journal: one that reads
+ * holds evidence of unconfirmed sends and is never discarded here. The caller
+ * has offered the raw text for download first.
+ */
+export function resetUnreadableJournal(): boolean {
+  let readable = false
+  try {
+    const text = localStorage.getItem(KEY)
+    const raw: unknown = text ? JSON.parse(text) : []
+    readable = Array.isArray(raw) && raw.length <= 10_000 && raw.every(valid)
+  } catch { readable = false }
+  if (readable) return false
+  try { localStorage.removeItem(KEY) } catch { return false }
+  restoreOperations()
+  return !operations.error
+}
 
 function mergeStored() {
   const text = localStorage.getItem(KEY)
@@ -84,13 +107,18 @@ function mergeStored() {
     if (!local) operations.entries.push({ ...stored, state: stored.state === 'awaiting-wallet' ? 'unknown' : stored.state })
     else {
       if (local.source !== stored.source || local.chainId !== stored.chainId || local.account !== stored.account || local.payload !== stored.payload || local.hash && stored.hash && local.hash !== stored.hash) throw new Error('Stored operation identity changed')
-      if (local.state === 'mismatch' && terminal(stored.state)) throw new Error('Mismatched publication cannot be resolved by another tab')
+      if (local.state === 'mismatch' && terminal(stored.state)) throw new Error('Open the tab that sent it')
       if (local.reportedHashes && stored.reportedHashes && JSON.stringify(local.reportedHashes) !== JSON.stringify(stored.reportedHashes)) throw new Error('Stored reported transaction evidence changed')
       if (local.reviewedAt !== undefined && stored.reviewedAt !== undefined && local.reviewedAt !== stored.reviewedAt) throw new Error('Stored operation review changed')
+      const hadHash = !!local.hash
       if (!local.hash && stored.hash) local.hash = stored.hash
       if (!local.reportedHashes && stored.reportedHashes) local.reportedHashes = [...stored.reportedHashes]
       if (local.reviewedAt === undefined && stored.reviewedAt !== undefined) local.reviewedAt = stored.reviewedAt
       if (stored.state === 'mismatch' || terminal(stored.state)) Object.assign(local, stored)
+      // The Syrius app answers in whichever tab its callback opens; the tab
+      // that asked learns the hash from storage. An unknown that already had
+      // a hash was set by a receipt check, and stays.
+      else if (stored.state === 'submitted' && local.state === 'unknown' && !hadHash && stored.hash) local.state = 'submitted'
     }
   }
 }
@@ -102,10 +130,10 @@ function persist() {
     const retained = operations.entries.filter((r) => !terminal(r.state))
       .concat(operations.entries.filter((r) => terminal(r.state)).slice(-200))
     localStorage.setItem(KEY, JSON.stringify(retained))
-    if (localStorage.getItem(KEY) !== JSON.stringify(retained)) throw new Error('Storage did not retain the journal')
+    if (localStorage.getItem(KEY) !== JSON.stringify(retained)) throw new Error("Can't save to this browser")
     operations.error = ''
   } catch {
-    operations.error = 'Cannot save operation history. Sending is paused; keep the original transaction hash.'
+    operations.error = "Can't save history. Sending is paused."
     throw new Error(operations.error)
   }
 }
@@ -136,32 +164,32 @@ export function unresolvedOperation(source: OperationIntent['source'], chainId: 
 
 export async function reviewHashlessOperation(id: string, acknowledged: boolean): Promise<void> {
   const review = () => {
-    if (!acknowledged) throw new Error('Close the original wallet prompt and review its history before continuing')
+    if (!acknowledged) throw new Error('Tick the box first')
     if (operations.error) throw new Error(operations.error)
     mergeStored()
     const record = operations.entries.find((r) => r.id === id)
-    if (!record || record.state !== 'unknown' || record.hash || record.reportedHashes?.length) throw new Error('Only an unknown operation without a reported hash can be reviewed')
+    if (!record || record.state !== 'unknown' || record.hash || record.reportedHashes?.length) throw new Error("This one can't be dismissed")
     if (record.reviewedAt !== undefined) return
     const now = Math.floor(Date.now() / 1000)
-    if (now - record.createdAt < UNKNOWN_REVIEW_DELAY_SECONDS) throw new Error('Wait at least one minute, then check the original wallet again')
+    if (now - record.createdAt < UNKNOWN_REVIEW_DELAY_SECONDS) throw new Error('Wait a minute, then check your wallet again')
     record.reviewedAt = now
     persist()
   }
   if (typeof window === 'undefined') return review()
-  if (!navigator.locks) throw new Error('This browser cannot establish exclusive publication ownership')
+  if (!navigator.locks) throw new Error("This browser can't sign. Use HTTPS or another browser.")
   return navigator.locks.request('bridge.publication-journal', { ifAvailable: true }, (lock) => {
-    if (!lock) throw new Error('Another tab still owns the wallet request. Close its original prompt first.')
+    if (!lock) throw new Error('Another tab is sending. Close its wallet prompt first.')
     review()
   })
 }
 
 export function beginOperation(intent: OperationIntent): Operation {
   if (operations.error) throw new Error(operations.error)
-  try { mergeStored() } catch { operations.error = 'Stored operation evidence is unavailable. Preserve it before sending again.'; throw new Error(operations.error) }
-  if (!validPayload(intent)) throw new Error('Invalid operation intent')
-  if (unresolvedOperation(intent.source, intent.chainId, intent.account, intent)) throw new Error('An earlier operation is unresolved. Reconcile its original hash before repeating that request.')
+  try { mergeStored() } catch { operations.error = "Saved history can't be read. Sending is paused."; throw new Error(operations.error) }
+  if (!validPayload(intent)) throw new Error('Send details invalid')
+  if (unresolvedOperation(intent.source, intent.chainId, intent.account, intent)) throw new Error('An earlier send is unconfirmed. Check Activity first.')
   const entry: Operation = { ...intent, id: crypto.randomUUID(), state: 'awaiting-wallet', createdAt: Math.floor(Date.now() / 1000) }
-  if (!valid(entry)) throw new Error('Invalid operation intent')
+  if (!valid(entry)) throw new Error('Send details invalid')
   operations.entries.push(entry)
   try { persist() } catch (err) { operations.entries.pop(); throw err }
   return entry
@@ -169,11 +197,11 @@ export function beginOperation(intent: OperationIntent): Operation {
 
 export function updateOperation(id: string, update: Pick<Operation, 'state'> & { hash?: string; reportedHashes?: string[] }) {
   const record = operations.entries.find((r) => r.id === id)
-  if (!record) throw new Error('Original operation is missing')
+  if (!record) throw new Error('Send not found. Reload.')
   if (record.state === 'mismatch' && update.state !== 'mismatch') throw new Error('Mismatched wallet evidence requires independent review')
-  if (terminal(record.state) && update.state !== record.state) throw new Error('A resolved operation cannot be reopened automatically')
-  if (['submitted', 'confirmed', 'reverted'].includes(update.state) && !update.hash && !record.hash) throw new Error('A transaction hash is required to resolve publication')
-  if (update.hash && (!validHash(record.source, update.hash) || record.hash && record.hash.toLowerCase() !== update.hash.toLowerCase())) throw new Error('Original operation hash cannot be replaced')
+  if (terminal(record.state) && update.state !== record.state) throw new Error('Already resolved')
+  if (['submitted', 'confirmed', 'reverted'].includes(update.state) && !update.hash && !record.hash) throw new Error('Paste the hash from your wallet')
+  if (update.hash && (!validHash(record.source, update.hash) || record.hash && record.hash.toLowerCase() !== update.hash.toLowerCase())) throw new Error('That hash is for a different send')
   if (Object.hasOwn(update, 'reportedHashes') && record.reportedHashes && JSON.stringify(record.reportedHashes) !== JSON.stringify(update.reportedHashes)) throw new Error('Reported transaction evidence cannot be replaced')
   if (update.reportedHashes && (update.state !== 'mismatch' || !update.reportedHashes.length || update.reportedHashes.length > 8 || !update.reportedHashes.every((hash) => validHash(record.source, hash)))) throw new Error('Invalid reported transaction evidence')
   const reports = update.reportedHashes ?? record.reportedHashes
@@ -182,14 +210,14 @@ export function updateOperation(id: string, update: Pick<Operation, 'state'> & {
   try { persist() } catch { /* retain exact result in memory and stop subsequent writes */ }
 }
 
-async function ownedSubmission(intent: OperationIntent, beforeSend: () => void, send: () => Promise<string>): Promise<{ hash: string; operationId: string }> {
+async function ownedSubmission(intent: OperationIntent, beforeSend: () => void, send: (operationId: string) => Promise<string>): Promise<{ hash: string; operationId: string }> {
   beforeSend()
   const operation = beginOperation(intent)
   let invoked = false
   try {
     beforeSend()
     invoked = true
-    const hash = await send()
+    const hash = await send(operation.id)
     if (!validHash(intent.source, hash)) throw new Error('Wallet response did not contain a valid transaction hash')
     updateOperation(operation.id, { state: 'submitted', hash })
     return { hash: hash.toLowerCase(), operationId: operation.id }
@@ -206,20 +234,20 @@ async function ownedSubmission(intent: OperationIntent, beforeSend: () => void, 
   }
 }
 
-export async function journalSubmission(intent: OperationIntent, beforeSend: () => void, send: () => Promise<string>): Promise<{ hash: string; operationId: string }> {
+export async function journalSubmission(intent: OperationIntent, beforeSend: () => void, send: (operationId: string) => Promise<string>): Promise<{ hash: string; operationId: string }> {
   // Secure-context Web Locks serialize wallet invocation across tabs. Durable
   // records still block replacements after a tab closes and releases its lock.
   if (typeof window === 'undefined') return ownedSubmission(intent, beforeSend, send)
-  if (!navigator.locks) throw new NotSubmittedError('This browser cannot establish exclusive publication ownership')
+  if (!navigator.locks) throw new NotSubmittedError("This browser can't sign. Use HTTPS or another browser.")
   return navigator.locks.request('bridge.publication-journal', { ifAvailable: true }, async (lock) => {
-    if (!lock) throw new NotSubmittedError('Another tab is publishing an operation. Keep its original result before sending again.')
+    if (!lock) throw new NotSubmittedError('Another tab is sending. Wait for it.')
     return ownedSubmission(intent, beforeSend, send)
   })
 }
 
 if (typeof window !== 'undefined') window.addEventListener?.('storage', (event) => {
   if (event.key !== KEY) return
-  try { mergeStored() } catch { operations.error = 'Operation evidence changed in another tab. Preserve the original journal before sending again.' }
+  try { mergeStored() } catch { operations.error = 'History changed in another tab. Reload.' }
 })
 
 export function operationForHash(source: OperationIntent['source'], chainId: number, hash: string) {

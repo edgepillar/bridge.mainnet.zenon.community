@@ -47,7 +47,8 @@
   --plasma: linear-gradient(135deg, #7bf06c 0%, #00d557 48%, #00b98a 100%);
   --on-plasma: #04140a;
 
-  --edge: inset 0 1px 0 rgb(255 255 255 / 0.06);
+  --edge: inset 0 1px 0 rgb(255 255 255 / 0.08);
+  --sheen: linear-gradient(180deg, rgb(255 255 255 / 0.045), transparent 160px);
   --shadow-panel: 0 1px 2px rgb(0 0 0 / 0.5), 0 8px 24px -12px rgb(0 0 0 / 0.7);
   --shadow-pop: 0 2px 4px rgb(0 0 0 / 0.4), 0 16px 40px -12px rgb(0 0 0 / 0.75);
   --bar-glass: color-mix(in srgb, var(--bg) 60%, transparent);
@@ -86,6 +87,7 @@
     --warn: #9a6200;
     --danger: #cf1330;
     --edge: none;
+    --sheen: linear-gradient(transparent, transparent);
     --shadow-panel: 0 1px 2px rgb(10 20 22 / 0.06), 0 6px 20px -12px rgb(10 20 22 / 0.2);
     --shadow-pop: 0 2px 6px rgb(10 20 22 / 0.08), 0 16px 40px -16px rgb(10 20 22 / 0.28);
     --wait-bg: color-mix(in srgb, var(--nom) 10%, transparent);
@@ -113,6 +115,7 @@
   --warn: #9a6200;
   --danger: #cf1330;
   --edge: none;
+  --sheen: linear-gradient(transparent, transparent);
   --shadow-panel: 0 1px 2px rgb(10 20 22 / 0.06), 0 6px 20px -12px rgb(10 20 22 / 0.2);
   --shadow-pop: 0 2px 6px rgb(10 20 22 / 0.08), 0 16px 40px -16px rgb(10 20 22 / 0.28);
   --wait-bg: color-mix(in srgb, var(--nom) 10%, transparent);
@@ -205,7 +208,7 @@
 
   /* A card lets a little of the starfield through, blurred. */
   .panel {
-    background: var(--card-glass);
+    background: var(--sheen), var(--card-glass);
     backdrop-filter: blur(10px);
     border: 1px solid var(--line);
     border-radius: var(--radius-card);
@@ -366,7 +369,8 @@
     z-index: 41;
     padding: 8px;
     border-radius: 20px;
-    background: var(--surface);
+    background: var(--sheen), color-mix(in srgb, var(--surface) 94%, transparent);
+    backdrop-filter: blur(16px);
     border: 1px solid var(--line);
     box-shadow: var(--edge), var(--shadow-pop);
     --icon-ring: var(--surface);

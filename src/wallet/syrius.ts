@@ -1,7 +1,8 @@
 // The Syrius browser extension. From the ptlc lab's adapter
-// (zenon-ptlc/lab/web/src/wallet/syrius.ts), written for v0.3.4 and later;
-// extensions older than v0.2.0 speak the postMessage protocol the original
-// bridge used, handled in syriusLegacy.ts.
+// (zenon-ptlc/lab/web/src/wallet/syrius.ts), written for v0.3.4 and later and
+// run against every release from v0.3.0 (docs/SYRIUS.md). The v0.1.x line
+// speaks the postMessage protocol the original bridge used, handled in
+// syriusLegacy.ts; the phone app is reached by links, in syriusApp.ts.
 //
 // Syrius signs any account block a page hands it:
 //
@@ -47,7 +48,7 @@ export interface ZenonProvider {
 }
 
 /**
- * v0.2.0 changed this from `{signedTransaction}` to `{hash, block}`. Both are
+ * v0.3.0 changed this from `{signedTransaction}` to `{hash, block}`. Both are
  * read, so that the hash is found whichever arrived.
  */
 export interface SendAccountBlockResult {
@@ -122,7 +123,7 @@ export function providerPresent(): boolean {
   return (typeof window !== 'undefined' && typeof window.zenon?.sendAccountBlock === 'function') || legacyPresent()
 }
 
-/** An extension older than v0.2.0: postMessage only (syriusLegacy.ts). */
+/** A v0.1.x extension: postMessage only (syriusLegacy.ts). */
 const isLegacy = () => typeof window.zenon?.sendAccountBlock !== 'function' && legacyPresent()
 let legacyState: WalletState | null = null
 
@@ -131,7 +132,7 @@ function provider(): ZenonProvider {
   if (!p) {
     throw new WalletError(
       WALLET_NOT_FOUND,
-      'no Zenon wallet in this browser. Install the Syrius extension (v0.3.4 or later) and reload.',
+      'no Zenon wallet in this browser. Install the Syrius extension and reload.',
     )
   }
   return p
@@ -143,12 +144,17 @@ export function whenProviderReady(ms = 1500): Promise<boolean> {
   return new Promise((resolve) => {
     const done = () => {
       window.removeEventListener('zenon#initialized', done)
+      watcher?.disconnect()
       clearTimeout(timer)
       resolve(providerPresent())
     }
     // The provider is injected at document_start, so it is normally already
     // there. The event covers an extension enabled after the page loaded.
     window.addEventListener('zenon#initialized', done)
+    // v0.1.x has no event and arrives at document_idle; its mark is a script
+    // element (syriusLegacy.ts).
+    const watcher = typeof MutationObserver === 'undefined' ? null : new MutationObserver(() => { if (providerPresent()) done() })
+    watcher?.observe(document.documentElement, { childList: true, subtree: true })
     const timer = setTimeout(done, ms)
   })
 }
@@ -215,9 +221,9 @@ async function prompting<T>(ask: () => Promise<T>, options: PromptOptions = {}):
 
 export interface WalletState {
   present: boolean
-  /** The provider protocol, not the extension's release: 2 since v0.2.0. */
+  /** The provider protocol, not the extension's release: 2 since v0.3.0. */
   protocol: string | null
-  /** Only v0.4.0 and later say, through `window.ethereum.syrius`. */
+  /** Only builds with the EVM provider say, through `window.ethereum.syrius`. */
   extensionVersion: string | null
   address: string | null
   chainId: number | null
@@ -298,16 +304,16 @@ export interface SentBlock {
 export class WalletOutcomeError extends WalletError {
   readonly reportedHash?: string
   constructor(message: string, hash?: string) {
-    super(-32603, `${message}. The original operation must be reconciled before sending again.`)
+    super(-32603, `${message}. Check Activity.`)
     this.reportedHash = typeof hash === 'string' && /^[0-9a-f]{64}$/i.test(hash) ? hash.toLowerCase() : undefined
   }
 }
 
-function checkedResult(template: BlockJson, hash: unknown, block: Partial<BlockJson> | null, account?: string): SentBlock {
-  if (typeof hash !== 'string' || !/^[0-9a-f]{64}$/i.test(hash)) throw new WalletOutcomeError('Wallet publication outcome is unknown')
-  if (block !== null && (typeof block !== 'object' || Array.isArray(block) || block.hash !== undefined && typeof block.hash !== 'string')) throw new WalletOutcomeError('Wallet response contains a malformed block', hash)
+export function checkedResult(template: BlockJson, hash: unknown, block: Partial<BlockJson> | null, account?: string): SentBlock {
+  if (typeof hash !== 'string' || !/^[0-9a-f]{64}$/i.test(hash)) throw new WalletOutcomeError('No reply from wallet')
+  if (block !== null && (typeof block !== 'object' || Array.isArray(block) || block.hash !== undefined && typeof block.hash !== 'string')) throw new WalletOutcomeError('Wallet reply is malformed', hash)
   if (signedBlockDiffers(template, block).length || block?.address && account && block.address !== account || block?.hash && block.hash.toLowerCase() !== hash.toLowerCase()) {
-    throw new WalletOutcomeError('Wallet response does not match the original operation', hash)
+    throw new WalletOutcomeError('Wallet signed different details', hash)
   }
   return { hash: hash.toLowerCase(), block }
 }

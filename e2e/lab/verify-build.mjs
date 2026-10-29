@@ -2,13 +2,16 @@ import fs from 'node:fs'
 import crypto from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { downloaderPhaseReset } from './downloader-phase-reset.mjs'
 export const here = path.dirname(fileURLToPath(import.meta.url))
 export const digest = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex')
 export function verifiedBuild(mode) {
   const manifest = JSON.parse(fs.readFileSync(path.join(here, '.build/manifest.json')))
   const pins = JSON.parse(fs.readFileSync(path.join(here, 'pins.json')))
   if (manifest.mode !== mode || JSON.stringify(manifest.pins) !== JSON.stringify(pins)
-    || manifest.sourceCommit !== pins.goZenonCommit || manifest.sourceTree !== pins.goZenonTree) throw new Error('Lab build identity changed; rebuild before starting')
+    || manifest.sourceCommit !== pins.goZenonCommit || manifest.sourceTree !== pins.goZenonTree
+    || manifest.downloaderSourceHash !== downloaderPhaseReset.patchedSha256
+    || JSON.stringify(manifest.downloaderPatch) !== JSON.stringify(downloaderPhaseReset)) throw new Error('Lab build identity changed; rebuild before starting')
   for (const [name, hash] of Object.entries(manifest.overlayHashes)) {
     if (digest(fs.readFileSync(path.join(here, name))) !== hash) throw new Error(`Lab input changed: ${name}; rebuild before starting`)
   }

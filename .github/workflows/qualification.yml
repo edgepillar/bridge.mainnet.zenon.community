@@ -23,6 +23,7 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
+      - run: python3 -B -m unittest discover -s e2e/lib -p 'browser_*_test.py'
       - run: npm run lint
       - run: npm run test:coverage
       - run: npm audit --audit-level=low
@@ -34,12 +35,63 @@ jobs:
           path: dist
           include-hidden-files: true
           retention-days: 14
+  browser-transport:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26.5.0
+          cache: npm
+      - run: npm ci
+      - name: Install and sandbox the pinned browser
+        run: |
+          mkdir -p .lab-tools
+          node_modules/.bin/browsers install chrome-headless-shell@155.0.8059.39 --path .lab-tools
+          browser_path=$(find .lab-tools -type f -name chrome-headless-shell -print -quit)
+          test -n "$browser_path"
+          browser_path="$GITHUB_WORKSPACE/$browser_path"
+          test -x "$browser_path"
+          printf 'CHROME_PATH=%s\n' "$browser_path" >> "$GITHUB_ENV"
+          printf '%s\n' \
+            'abi <abi/4.0>,' \
+            'include <tunables/global>' \
+            "profile bridge-qualification-browser \"$browser_path\" flags=(unconfined) {" \
+            '  userns,' \
+            '}' > .lab-tools/browser.apparmor
+          sudo install -m 0644 .lab-tools/browser.apparmor /etc/apparmor.d/bridge-qualification-browser
+          sudo apparmor_parser --replace /etc/apparmor.d/bridge-qualification-browser
+      - name: Install the exact offline reporter component
+        run: node e2e/lab/install-browser-reporter.mjs
+      - name: Calibrate the owned offline renderer before chains
+        run: node e2e/browser-crash-control.mjs
+      - name: Qualify the direct network guard before chains
+        run: node e2e/browser-network-control.mjs
+      - name: Exercise bounded fresh-browser transport starts
+        run: node --experimental-strip-types e2e/browser-transport-probe.mjs
+      - name: Retain sanitized browser transport evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: browser-transport-evidence
+          path: |
+            .browser-results/transport-probe-report.json
+            .browser-results/offline-crash-control.json
+            .browser-results/network-policy-control.json
+            .lab-tools/browser-reporter-manifest.json
+          include-hidden-files: true
+          retention-days: 14
   docker-lab:
+    needs: browser-transport
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
       GO_ZENON_DIR: ${{ github.workspace }}/.lab-source
       EXPECTED_BROWSER_VERSION: 155.0.8059.39
+      BROWSER_SIGNAL_TRACE: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -72,6 +124,14 @@ jobs:
             '}' > .lab-tools/browser.apparmor
           sudo install -m 0644 .lab-tools/browser.apparmor /etc/apparmor.d/bridge-qualification-browser
           sudo apparmor_parser --replace /etc/apparmor.d/bridge-qualification-browser
+      - name: Calibrate the owned kernel signal observer
+        run: |
+          if ! sudo mountpoint -q /sys/kernel/tracing; then
+            sudo mount -t tracefs tracefs /sys/kernel/tracing
+          fi
+          test "$(sudo findmnt -n -o FSTYPE --target /sys/kernel/tracing)" = tracefs
+          mkdir -p .browser-results
+          sudo -n python3 -B e2e/lib/browser-signal-watch.py --self-test > .browser-results/kernel-signal-control.json
       - name: Qualify a fresh Docker lab
         run: |
           test ! -e e2e/.state/publication.json
@@ -79,7 +139,12 @@ jobs:
           test -z "$(docker ps -aq --filter label=com.docker.compose.project=bridge-lab)"
           touch .lab-tools/docker-launch-owned
           npm run lab:up
-          npm run test:e2e
+          e2e_exit=0
+          timeout --signal=TERM --kill-after=30s 18m npm run test:e2e || e2e_exit=$?
+          rpc_exit=0
+          BROWSER_PROBE_MODE=docker node --experimental-strip-types e2e/browser-transport-probe.mjs || rpc_exit=$?
+          printf '{"schema":1,"mode":"docker","e2eWrapperExit":%s,"rpcProbeExit":%s,"compiledProbeExit":null,"timeoutExitMeansChildOutcomeUnknown":true}\n' "$e2e_exit" "$rpc_exit" > .browser-results/qualification-stage-outcomes.json
+          test "$e2e_exit" -eq 0 && test "$rpc_exit" -eq 0
       - name: Stop this job's Docker lab
         if: always()
         run: |
@@ -92,6 +157,9 @@ jobs:
           name: docker-qualification-evidence
           path: |
             .browser-results/built-report.json
+            .browser-results/lab-transport-probe-report.json
+            .browser-results/kernel-signal-control.json
+            .browser-results/qualification-stage-outcomes.json
             e2e/lab/.build/manifest.json
             e2e/lab/.build/docker/run-manifest.json
             e2e/lab/.build/docker/readiness-report.json
@@ -99,6 +167,7 @@ jobs:
           include-hidden-files: true
           retention-days: 14
   isolated-lab:
+    needs: browser-transport
     name: isolated-lab (${{ matrix.sync_case }})
     strategy:
       fail-fast: false
@@ -113,6 +182,7 @@ jobs:
       LAB_COLD_CASE: ${{ matrix.sync_case }}
       LAB_RPC_LOG_LEVEL: ${{ matrix.sync_case == 'info' && 'info' || 'error' }}
       LAB_RPC_PROFILE_MODE: ${{ matrix.sync_case == 'error-b' && 'postmortem' || 'loopback' }}
+      BROWSER_SIGNAL_TRACE: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -142,6 +212,9 @@ jobs:
           browser_path=$(find .lab-tools -type f -name chrome-headless-shell -print -quit)
           test -n "$browser_path"
           printf 'CHROME_PATH=%s/%s\n' "$GITHUB_WORKSPACE" "$browser_path" >> "$GITHUB_ENV"
+      - name: Install the exact offline reporter component
+        if: matrix.sync_case == 'info'
+        run: node e2e/lab/install-browser-reporter.mjs
       - name: Configure namespaces for the pinned browser sandbox
         run: |
           test -x "$CHROME_PATH"
@@ -154,6 +227,17 @@ jobs:
           sudo install -m 0644 .lab-tools/browser.apparmor /etc/apparmor.d/bridge-qualification-browser
           sudo apparmor_parser --replace /etc/apparmor.d/bridge-qualification-browser
       - run: npm run lab:build:native
+      - name: Calibrate the owned kernel signal observer
+        run: |
+          if ! sudo mountpoint -q /sys/kernel/tracing; then
+            sudo mount -t tracefs tracefs /sys/kernel/tracing
+          fi
+          test "$(sudo findmnt -n -o FSTYPE --target /sys/kernel/tracing)" = tracefs
+          mkdir -p .browser-results
+          sudo -n python3 -B e2e/lib/browser-signal-watch.py --self-test > .browser-results/kernel-signal-control.json
+      - name: Reproduce and qualify downloader phase isolation
+        if: matrix.sync_case == 'error-b'
+        run: node e2e/lab/downloader-phase-control.mjs
       - name: Qualify components and both isolated chains
         run: |
           node e2e/lab/native.mjs > .lab-tools/native.log 2>&1 &
@@ -161,7 +245,17 @@ jobs:
           trap 'kill "$lab_supervisor" 2>/dev/null || true; wait "$lab_supervisor" || true' EXIT
           node e2e/lab/frontier.mjs 60 --wait 120 --native
           npm run test:browser
-          npm run test:e2e
+          e2e_exit=0
+          timeout --signal=TERM --kill-after=30s 18m npm run test:e2e || e2e_exit=$?
+          rpc_exit=0
+          BROWSER_PROBE_MODE=native node --experimental-strip-types e2e/browser-transport-probe.mjs || rpc_exit=$?
+          compiled_exit=null
+          if test "$LAB_COLD_CASE" = info; then
+            compiled_exit=0
+            BROWSER_PROBE_MODE=native BROWSER_PROBE_CLIENT=compiled node --experimental-strip-types e2e/browser-transport-probe.mjs || compiled_exit=$?
+          fi
+          printf '{"schema":1,"mode":"native","e2eWrapperExit":%s,"rpcProbeExit":%s,"compiledProbeExit":%s,"timeoutExitMeansChildOutcomeUnknown":true}\n' "$e2e_exit" "$rpc_exit" "$compiled_exit" > .browser-results/qualification-stage-outcomes.json
+          test "$e2e_exit" -eq 0 && test "$rpc_exit" -eq 0 && { test "$compiled_exit" = null || test "$compiled_exit" -eq 0; }
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -169,8 +263,14 @@ jobs:
           path: |
             .browser-results/report.json
             .browser-results/built-report.json
+            .browser-results/lab-transport-probe-report.json
+            .browser-results/lab-compiled-startup-report.json
+            .browser-results/kernel-signal-control.json
+            .browser-results/qualification-stage-outcomes.json
+            .lab-tools/browser-reporter-manifest.json
             .browser-results/*.png
             e2e/lab/.build/manifest.json
+            e2e/lab/.build/downloader-control-report.json
             e2e/lab/.build/native/run-manifest.json
             e2e/lab/.build/native/readiness-report.json
             e2e/.cache/compile-manifest.json

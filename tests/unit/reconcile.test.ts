@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
-import { ed25519 } from '@noble/curves/ed25519'
+import { ed25519 } from '@noble/curves/ed25519.js'
 import { blockTemplate, computeBlockHash } from '../../src/znn/block.ts'
 import { addressFromPublicKey, formatAddress, toBase64, toHex, ZNN_ZTS } from '../../src/znn/primitives.ts'
 import { BRIDGE } from '../../src/config.ts'

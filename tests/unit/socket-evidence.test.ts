@@ -23,3 +23,8 @@ it('separates an empty browser error from a calibrated reserved-bit protocol err
   expect(socketFailureClass('')).toBe('EMPTY_ERROR')
   expect(socketFailureClass('One or more reserved bits are on: reserved1 = 1, reserved2 = 0, reserved3 = 0')).toBe('INVALID_FRAME')
 })
+
+it('separates a refused Origin handshake from a validated transport drop',()=>{
+ expect(socketFailureClass('Error during WebSocket handshake: Unexpected response code: 403')).toBe('HANDSHAKE_FORBIDDEN')
+ expect(socketFailureClass('Unexpected response code: 403 wss://private.fixture.invalid/')).toBe('HANDSHAKE_FORBIDDEN')
+})

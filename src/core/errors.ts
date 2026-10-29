@@ -49,6 +49,8 @@ export function userMessage(err: unknown): UserMessage {
   const has = (c: number) => codes.includes(c)
   const say = (text: string, declined = false): UserMessage => ({ text, declined })
 
+  // The request went to the Syrius app; its answer arrives as a page load.
+  if (chain.some((l) => l.name === 'AppHandoffError')) return say('Approve in Syrius', true)
   if (has(4001) || chain.some((l) => l.declined === true) || /user (rejected|denied|cancel)|rejected the request|request rejected|declined in/i.test(all)) {
     return say('Declined in wallet', true)
   }

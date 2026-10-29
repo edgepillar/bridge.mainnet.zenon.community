@@ -5,7 +5,7 @@ import path from 'node:path'
 import net from 'node:net'
 import { spawn, execFileSync } from 'node:child_process'
 import { here, digest, verifiedBuild } from './verify-build.mjs'
-import { attachOwnedPostmortem, identityForPostmortem } from './native-postmortem.mjs'
+import { attachOwnedPostmortem, identityForPostmortem, nodePostmortemDirectory, nativePostmortemRoles } from './native-postmortem.mjs'
 const manifest = verifiedBuild('native'), pins = manifest.pins
 const root = path.join(here, '.build/native'), assets = path.join(root, 'assets')
 const anvil = process.env.ANVIL_BIN
@@ -33,25 +33,29 @@ if (fs.existsSync(identityFile) && fs.readFileSync(identityFile, 'utf8') !== man
 if (!fs.existsSync(path.join(assets, 'genesis.json'))) execFileSync(process.execPath, [path.join(here, 'make-assets.mjs'), path.join(here, '.build/src/docker/devnet'), assets], { stdio: 'inherit' })
 fs.writeFileSync(identityFile, manifest.key)
 const children = []
-let rpcChild, postmortem
+const nodeChildren=new Map(),postmortems=new Map()
 let stopping = false, failed = false
 const stop = () => {
   if (stopping) return
   stopping = true
-  postmortem?.close()
+  for(const owner of postmortems.values())owner.close()
   for (const child of children) child.kill('SIGTERM')
   setTimeout(() => { for (const child of children) if (child.exitCode === null) child.kill('SIGKILL') }, 2000).unref()
 }
 process.on('SIGINT', stop); process.on('SIGTERM', stop)
-function start(binary, args, log, env = {}) {
+function start(binary, args, log, env = {}, role) {
   const fd = fs.openSync(path.join(root, log), 'a', 0o600)
   const child = spawn(binary, args, { stdio: ['ignore', fd, fd], env: { ...process.env, ...env } })
   fs.closeSync(fd); children.push(child)
+  if(role)nodeChildren.set(role,child)
   child.on('error', () => { failed = true; stop() })
-  child.on('exit', (code, signal) => { if (child === rpcChild) { try { postmortem?.noteExit(code, signal) } catch { failed = true; console.error('Owned postmortem acknowledgement unavailable') } } if (!stopping) { failed = true; console.error('A lab process exited; stopping the isolated lab'); stop() } })
+  child.on('exit', (code, signal) => { if (role) { try { postmortems.get(role)?.noteExit(code, signal) } catch { failed = true; console.error('Owned postmortem acknowledgement unavailable') } } if (!stopping) { failed = true; console.error('A lab process exited; stopping the isolated lab'); stop() } })
   return child
 }
-if (profileMode === 'postmortem') postmortem = await attachOwnedPostmortem({ directory: root, identity: identityForPostmortem({ head: bridgeHead, tree: bridgeTree, build: manifest }), signalRpc: () => rpcChild?.exitCode === null && rpcChild.kill('SIGQUIT') })
+for(const role of nativePostmortemRoles){
+  const directory=nodePostmortemDirectory({directory:root,nodeRole:role,create:true})
+  postmortems.set(role,await attachOwnedPostmortem({directory,identity:identityForPostmortem({head:bridgeHead,tree:bridgeTree,build:manifest,nodeRole:role}),signalRpc:()=>{const child=nodeChildren.get(role);return child?.exitCode===null&&child.kill('SIGQUIT')}}))
+}
 const ipPorts = { 10: 47010, 12: 47012, 13: 47013, 14: 47014, 11: 47011 }
 const configHashes = {}
 let index = 0
@@ -78,11 +82,10 @@ for (const [role, port] of Object.entries(ports)) {
   cfg.RPC.WSPort = role === 'rpc' ? 46998 : 47200 + index++
   fs.writeFileSync(configFile, JSON.stringify(cfg)); configHashes[role] = digest(fs.readFileSync(configFile))
   const diagnostics = role === 'rpc' && profileMode === 'loopback' ? ['--pprof', '--pprof.addr', '127.0.0.1', '--pprof.port', '47210'] : []
-  const child = start(path.join(here, '.build/znnd'), [...diagnostics, '--data', data, '--config', configFile], `${role}.log`, { ZNN_DEVNET_BRIDGE: '1', ZNN_BRIDGE_ADMIN: 'z1qq6eg8n43g032hanpsfp02qcdmv7zfj3y2lt5d', GOMAXPROCS: '2', GOMEMLIMIT: '256MiB' })
-  if (role === 'rpc') rpcChild = child
+  start(path.join(here, '.build/znnd'), [...diagnostics, '--data', data, '--config', configFile], `${role}.log`, { ZNN_DEVNET_BRIDGE: '1', ZNN_BRIDGE_ADMIN: 'z1qq6eg8n43g032hanpsfp02qcdmv7zfj3y2lt5d', GOMAXPROCS: '2', GOMEMLIMIT: '256MiB' }, role)
 }
 start(anvil, ['--host', '127.0.0.1', '--port', '46545', '--chain-id', String(pins.chainIds.evm), '--block-time', '1', '--silent'], 'anvil.log')
-fs.writeFileSync(path.join(root, 'run-manifest.json'), JSON.stringify({ sourceCommit: manifest.sourceCommit, sourceTree: manifest.sourceTree, bridgeSourceCommit: bridgeHead, bridgeSourceTree: bridgeTree, buildKey: manifest.key, znndHash: manifest.binaryHash, anvilHash: digest(fs.readFileSync(anvil)), anvilVersion, genesisHash: digest(fs.readFileSync(path.join(assets, 'genesis.json'))), configHashes, startedAt: new Date().toISOString(), chainIds: pins.chainIds, diagnostics: { profileMode, profileHost: profileMode === 'loopback' ? '127.0.0.1' : null, profilePort: profileMode === 'loopback' ? 47210 : null, rpcLogLevel, coldCase } }, null, 2))
+fs.writeFileSync(path.join(root, 'run-manifest.json'), JSON.stringify({ sourceCommit: manifest.sourceCommit, sourceTree: manifest.sourceTree, bridgeSourceCommit: bridgeHead, bridgeSourceTree: bridgeTree, buildKey: manifest.key, znndHash: manifest.binaryHash, anvilHash: digest(fs.readFileSync(anvil)), anvilVersion, genesisHash: digest(fs.readFileSync(path.join(assets, 'genesis.json'))), configHashes, startedAt: new Date().toISOString(), chainIds: pins.chainIds, diagnostics: { profileMode, profileHost: profileMode === 'loopback' ? '127.0.0.1' : null, profilePort: profileMode === 'loopback' ? 47210 : null, rpcLogLevel, coldCase, postmortemRoles: [...nativePostmortemRoles] } }, null, 2))
 console.log('Pinned native bridge lab started on loopback; verify chain readiness before fixture writes.')
 await Promise.all(children.map((child) => new Promise((resolve) => child.once('exit', resolve))))
 process.exitCode = failed ? 1 : 0

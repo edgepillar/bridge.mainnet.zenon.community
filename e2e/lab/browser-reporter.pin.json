@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "version": "155.0.8059.39",
+  "platform": "linux64",
+  "sourceUrl": "https://storage.googleapis.com/chrome-for-testing-public/155.0.8059.39/linux64/chrome-linux64.zip",
+  "archiveBytes": 198195769,
+  "archiveEtag": "\"94aee4adcbec2acad583250fb7eaa110\"",
+  "member": "chrome-linux64/chrome_crashpad_handler",
+  "rangeStart": 132948403,
+  "rangeEnd": 133872722,
+  "compressedBytes": 924320,
+  "compressedSha256": "f61c9dae220db01360fdb5358b75c478f0a63b18546e52ae1d7f192dacfe942f",
+  "bytes": 1957824,
+  "sha256": "01693aff9deaa4c14aced75726d1d65b5005cbcb41ead4316a30de258d5d0bb5",
+  "crc32": 1121693352,
+  "browserSha256": "d8f762c0153b944bc0cd747fa6ae2e0497d29d703049833e2942e15fc646b82b",
+  "scope": "CI_DIAGNOSTICS_ONLY_NO_BINARY_REPOSITORY_OR_RELEASE_DISTRIBUTION"
+}

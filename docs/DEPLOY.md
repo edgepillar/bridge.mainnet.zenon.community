@@ -25,9 +25,9 @@ All `VITE_*` values are public once built. The owner deliberately supports a bro
 
 ## Browser policy and hosting headers
 
-The HTML declares a CSP that allows local scripts/fonts, local or data/HTTPS images, secure RPC connections and explicitly listed loopback lab endpoints. Objects and form submission are disabled; referrer disclosure is disabled. Theme initialization and the legacy affiliate redirect use external local scripts. Legacy redirects accept only this deployment's origin and URLs without userinfo.
+The HTML declares a CSP that allows local scripts/fonts, local or data images (EIP-6963 wallet icons are data URIs by the standard), secure RPC connections and explicitly listed loopback lab endpoints. Objects and form submission are disabled; referrer disclosure is disabled. Theme initialization and the legacy affiliate redirect use external local scripts. Legacy redirects accept only this deployment's origin and URLs without userinfo.
 
-`frame-ancestors` cannot be enforced by a meta CSP. A hosting owner must supply and test an HTTP framing policy, content-type protection and the selected transport policy through a hosting layer that supports headers. GitHub Pages does not supply arbitrary response-header configuration through repository HTML. The `.foo` domain's HSTS preload must be considered when evaluating HTTP behavior. Verify actual post-deployment behavior rather than claiming that a meta tag or DNS change installed server headers.
+`frame-ancestors` cannot be enforced by a meta CSP. The page therefore checks at start (`src/main.ts`): framed by another origin, it renders only a link that opens it in its own tab, so no wallet prompt can be raised under someone else's overlay. That check is a script, not a header. A hosting owner must still supply and test an HTTP framing policy, content-type protection and the selected transport policy through a hosting layer that supports headers. GitHub Pages does not supply arbitrary response-header configuration through repository HTML. The `.foo` domain's HSTS preload must be considered when evaluating HTTP behavior. Verify actual post-deployment behavior rather than claiming that a meta tag or DNS change installed server headers.
 
 ## Production release gates
 

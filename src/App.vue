@@ -7,9 +7,9 @@ import Banner from './components/Banner.vue'
 import Address from './components/Address.vue'
 import StatusChip from './components/StatusChip.vue'
 import zenonMark from './assets/zenon.svg'
-import { route, ROUTES, go, type Route } from './state/router.ts'
+import { route, NAV, go, type Route } from './state/router.ts'
 import { theme, toggleTheme } from './state/theme.ts'
-import { node, syrius, wrongZenonChain, hostOf, chainId, networkLabel, requestWalletNode, walletNode } from './state/zenon.ts'
+import { node, syrius, zenonChainMismatch, hostOf, chainId, networkLabel, requestWalletNode, walletNode, checkSyriusNetwork } from './state/zenon.ts'
 import { bridge, bridgeDown, transferBlocker } from './state/bridge.ts'
 import { referrer, clearReferral } from './state/referral.ts'
 import { actionCount } from './state/activity.ts'
@@ -25,7 +25,7 @@ const views = {
   affiliate: defineAsyncComponent(() => import('./views/AffiliateView.vue')),
 }
 const current = computed(() => views[route.value])
-// A phone's tab bar has room for a mark, not for five words.
+// A phone's tab bar has room for a mark, not for four words.
 const ICONS: Record<Route, Component> = { bridge: ArrowLeftRight, activity: History, liquidity: Droplets, stats: ChartNoAxesColumn, affiliate: Gift }
 const hrefOf = (id: Route) => (id === 'bridge' ? '#/' : '#/' + id)
 
@@ -41,6 +41,50 @@ watch(
 const noticeHidden = ref(false)
 // Closing the bridge banner holds until the bridge's state changes or the page is loaded again. The chip in the header stays.
 const downHidden = ref(false)
+
+const chainMismatch = ref(false)
+let mismatchTimer: ReturnType<typeof setTimeout> | undefined
+watch(zenonChainMismatch, (now) => {
+  clearTimeout(mismatchTimer)
+  if (!now) chainMismatch.value = false
+  else mismatchTimer = setTimeout(() => (chainMismatch.value = zenonChainMismatch()), 1500)
+}, { immediate: true })
+
+// A banner that comes or goes opens or closes its own height, gap included,
+// in step with the page fade. Removed at once, it moved everything under it
+// by its height in one frame (the stalled banner leaving for Status).
+const BANNER_GAP = 8
+const BANNER_SIZE = ['height', 'paddingTop', 'paddingBottom', 'borderTopWidth', 'borderBottomWidth', 'marginTop', 'opacity', 'overflow', 'transition'] as const
+function bannerShut(s: CSSStyleDeclaration) {
+  s.height = '0px'
+  s.paddingTop = s.paddingBottom = s.borderTopWidth = s.borderBottomWidth = '0px'
+  s.marginTop = `-${BANNER_GAP}px`
+  s.opacity = '0'
+}
+function bannerAnimate(el: Element, open: boolean, done: () => void) {
+  const e = el as HTMLElement, s = e.style
+  const height = e.offsetHeight
+  s.overflow = 'hidden'
+  if (open) bannerShut(s)
+  else s.height = `${height}px`
+  void e.offsetHeight
+  s.transition = ['height', 'padding', 'border-width', 'margin-top', 'opacity'].map((p) => `${p} 180ms var(--ease)`).join(', ')
+  if (open) {
+    s.height = `${height}px`
+    for (const k of ['paddingTop', 'paddingBottom', 'borderTopWidth', 'borderBottomWidth', 'marginTop', 'opacity'] as const) s[k] = ''
+  } else bannerShut(s)
+  let finished = false
+  const finish = () => {
+    if (finished) return
+    finished = true
+    if (open) for (const k of BANNER_SIZE) s[k] = ''
+    done()
+  }
+  e.addEventListener('transitionend', (ev) => ev.target === e && ev.propertyName === 'height' && finish())
+  setTimeout(finish, 260)
+}
+const bannerEnter = (el: Element, done: () => void) => bannerAnimate(el, true, done)
+const bannerLeave = (el: Element, done: () => void) => bannerAnimate(el, false, done)
 watch(
   () => bridge.health?.state,
   () => (downHidden.value = false),
@@ -51,15 +95,16 @@ watch(
 )
 // The bridge's state says nothing about a swap, and a swap's routers nothing about the bridge.
 const swapping = computed(() => route.value === 'bridge' && mode.value === 'swap')
-const downMessage = computed(() => {
+// One down state, said once. The header chip links to Status, which has the
+// detail, so the banner carries only what it means for a send.
+const downBanner = computed(() => {
   const blocker = transferBlocker()
-  if (blocker && !['Bridge is unavailable', 'Bridge is paused'].includes(blocker)) return blocker + '. Refresh before sending.'
-  // Stalled: the banner says what it means for the user; Stats has the detail.
-  if (bridge.health?.state === 'down') return config.swap ? 'EVM swaps use separate routers.' : ''
-  if (bridge.health?.message && bridgeDown()) return bridge.health.message
-  if (bridge.info?.halted) return 'The bridge is halted. Transfers are paused.'
-  if (bridge.info?.allowKeyGen) return 'Orchestrators are generating a new key. Transfers wait until it is done.'
-  return ''
+  if (blocker && !['Bridge is unavailable', 'Bridge is paused'].includes(blocker)) return { title: blocker + '.', body: '' }
+  if (bridge.info?.halted) return { title: 'Bridge is halted.', body: 'Transfers are paused.' }
+  if (bridge.info?.allowKeyGen) return { title: 'New key in progress.', body: 'Transfers wait.' }
+  if (bridge.health?.state === 'down') return { title: 'Bridge is stalled.', body: config.swap ? 'Swaps still work.' : '' }
+  if (bridge.health?.message && bridgeDown()) return { title: bridge.health.message, body: '' }
+  return null
 })
 // The header's one-word verdict. The contract's own switches answer before
 // the scan of orchestrator blocks has finished.
@@ -88,7 +133,7 @@ const status = computed(() => {
         </a>
         <span v-if="chainId() !== 1" class="chip chip-warn mono hidden sm:inline-flex" data-testid="network-chip">{{ networkLabel() }} {{ chainId() }}</span>
         <nav class="ml-2 hidden items-center gap-1 xl:flex">
-          <a v-for="r in ROUTES" :key="r.id" :href="hrefOf(r.id)" class="nav-link" :class="{ active: route === r.id }">
+          <a v-for="r in NAV" :key="r.id" :href="hrefOf(r.id)" class="nav-link" :class="{ active: route === r.id }" :aria-current="route === r.id ? 'page' : undefined">
             {{ r.label }}<span v-if="r.id === 'activity' && actionCount()" class="dot-count">{{ actionCount() }}</span>
           </a>
         </nav>
@@ -111,36 +156,45 @@ const status = computed(() => {
               <a class="menu-row" href="https://github.com/sol-znn/bridge.mainnet.zenon.community" target="_blank" rel="noopener">
                 <CodeXml :size="15" /><span class="flex-1">Source</span>
               </a>
+              <a class="menu-row" href="#/affiliate" data-testid="menu-referral" @click="more = false">
+                <Gift :size="15" /><span class="flex-1">Referral</span>
+              </a>
             </div>
           </Transition>
         </div>
       </div>
     </header>
 
-    <div class="mx-auto mt-2 grid w-full max-w-[640px] grid-cols-1 gap-2 px-4">
-      <Banner v-if="swapping && swapMessage" tone="danger">
+    <TransitionGroup tag="div" class="mx-auto mt-2 grid w-full max-w-[640px] grid-cols-1 gap-2 px-4" :css="false" @enter="bannerEnter" @leave="bannerLeave">
+      <Banner v-if="swapping && swapMessage" key="swap" tone="danger">
         <strong>Swaps are unavailable.</strong> {{ swapMessage }}
       </Banner>
-      <Banner v-if="(downMessage || bridge.health?.state === 'down') && route !== 'stats' && !swapping && !downHidden" tone="danger" dismissable @dismiss="downHidden = true">
-        <strong>{{ networkLabel() }} bridge is down.</strong> {{ downMessage }}
-        <template #action><a href="#/stats" class="btn btn-ghost btn-sm -my-1 !text-inherit">Status</a></template>
+      <Banner v-if="downBanner && route !== 'stats' && !swapping && !downHidden" key="down" tone="danger" dismissable data-testid="down-banner" @dismiss="downHidden = true">
+        <strong>{{ downBanner.title }}</strong> {{ downBanner.body }}
       </Banner>
-      <Banner v-if="wrongZenonChain()" tone="wait">
+      <Banner v-if="syrius.app && syrius.address && syrius.chainId === null" key="app-network" tone="wait" data-testid="app-network">
+        Check the network Syrius is on.
+        <template #action>
+          <button class="btn btn-sm -my-1" @click="checkSyriusNetwork">Check network</button>
+        </template>
+      </Banner>
+      <Banner v-else-if="chainMismatch" key="wrong-chain" tone="wait">
         <span class="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
           <span>Syrius</span><span class="chip chip-dim mono">{{ zenonNetworkName(syrius.chainId!) }} {{ syrius.chainId }}</span>
           <span>Page</span><span class="chip chip-dim mono">{{ networkLabel() }} {{ chainId() }}</span>
         </span>
         <template #action>
-          <button class="btn btn-sm -my-1" data-testid="use-wallet-node" :disabled="walletNode.checking" @click="requestWalletNode">Use Syrius node</button>
+          <button v-if="syrius.app" class="btn btn-sm -my-1" @click="checkSyriusNetwork">Check again</button>
+          <button v-else class="btn btn-sm -my-1" data-testid="use-wallet-node" :disabled="walletNode.checking" @click="requestWalletNode">Use Syrius node</button>
         </template>
       </Banner>
-      <Banner v-if="walletNode.problem" tone="warn" dismissable @dismiss="walletNode.problem = ''">{{ walletNode.problem }}.</Banner>
-      <Banner v-if="node.notice && !noticeHidden" tone="wait" dismissable @dismiss="noticeHidden = true">{{ node.notice }}</Banner>
-      <Banner v-if="referrer" tone="new">
-        Referral from <Address :value="referrer" :copy="false" class="text-fg" />. Any bonus depends on the recipient, token and current program eligibility shown in the transfer quote.
+      <Banner v-if="walletNode.problem" key="node-problem" tone="warn" dismissable @dismiss="walletNode.problem = ''">{{ walletNode.problem }}.</Banner>
+      <Banner v-if="node.notice && !noticeHidden" key="notice" tone="wait" dismissable @dismiss="noticeHidden = true">{{ node.notice }}</Banner>
+      <Banner v-if="referrer" key="referrer" tone="new">
+        Referral from <Address :value="referrer" :copy="false" class="text-fg" />
         <template #action><button class="btn btn-ghost btn-sm -my-1 !text-inherit" @click="clearReferral">Clear</button></template>
       </Banner>
-    </div>
+    </TransitionGroup>
 
     <main class="mx-auto w-full max-w-6xl flex-1 px-4 pt-6 pb-28 md:px-8 md:pb-16">
       <Transition name="fade" mode="out-in">
@@ -150,7 +204,7 @@ const status = computed(() => {
 
     <!-- A phone navigates from the bottom, where the thumb is. -->
     <nav class="dock xl:hidden" aria-label="Sections">
-      <a v-for="r in ROUTES" :key="r.id" :href="hrefOf(r.id)" class="dock-link" :class="{ active: route === r.id }" :aria-label="r.label">
+      <a v-for="r in NAV" :key="r.id" :href="hrefOf(r.id)" class="dock-link" :class="{ active: route === r.id }" :aria-label="r.label" :aria-current="route === r.id ? 'page' : undefined">
         <component :is="ICONS[r.id]" :size="20" />
         <span v-if="r.id === 'activity' && actionCount()" class="dot-count dock-count">{{ actionCount() }}</span>
       </a>
@@ -158,9 +212,10 @@ const status = computed(() => {
 
     <div class="toasts" aria-live="polite">
       <TransitionGroup name="fade">
-        <div v-for="t in toasts" :key="t.id" class="toast" :class="'toast-' + t.tone" @click="dismiss(t.id)">
+        <div v-for="t in toasts" :key="t.id" class="toast" :class="'toast-' + t.tone" role="status" @click="dismiss(t.id)">
           <span>{{ t.text }}</span>
           <a v-if="t.link" :href="t.link.href" target="_blank" rel="noopener" class="link ml-2" @click.stop>{{ t.link.label }}</a>
+          <span class="toast-bar" :style="{ animationDuration: t.ms + 'ms' }" aria-hidden="true" />
         </div>
       </TransitionGroup>
     </div>
@@ -191,6 +246,9 @@ const status = computed(() => {
 }
 .brand:hover {
   transform: scale(1.03);
+}
+.brand img {
+  filter: drop-shadow(0 0 10px color-mix(in srgb, var(--znn) 30%, transparent));
 }
 .nav-link {
   position: relative;
@@ -261,7 +319,7 @@ const status = computed(() => {
   left: 12px;
   z-index: 30;
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 4px;
   padding: 6px;
   border-radius: 22px;
@@ -315,28 +373,51 @@ const status = computed(() => {
     bottom: 20px;
   }
 }
+/* One toast at a time, with a bar that drains while it stays: the reader sees
+   how long it has without a close button to aim for. */
 .toast {
+  --tone: var(--dim);
+  position: relative;
+  overflow: hidden;
   pointer-events: auto;
   max-width: 420px;
-  padding: 12px 16px;
+  padding: 12px 16px 14px;
   font-size: 14px;
   border-radius: 16px;
-  background: var(--surface);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  backdrop-filter: blur(14px);
   border: 1px solid var(--line);
-  border-left: 3px solid var(--dim);
   box-shadow: var(--edge), var(--shadow-pop);
   cursor: pointer;
 }
 .toast-ok {
-  border-left-color: var(--ok);
+  --tone: var(--ok);
 }
 .toast-wait {
-  border-left-color: var(--wait);
+  --tone: var(--wait);
 }
 .toast-warn {
-  border-left-color: var(--warn);
+  --tone: var(--warn);
 }
 .toast-danger {
-  border-left-color: var(--danger);
+  --tone: var(--danger);
+}
+.toast-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: var(--tone);
+  transform-origin: left;
+  animation: toast-drain linear forwards;
+}
+@keyframes toast-drain {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
 }
 </style>

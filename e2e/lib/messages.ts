@@ -15,7 +15,7 @@
 // takes. The EVM side wants 27 or 28 (src/core/status.ts evmSignature).
 
 import { encodeAbiParameters, keccak256, hashMessage, type Hex } from 'viem'
-import { secp256k1 } from '@noble/curves/secp256k1'
+import { secp256k1 } from '@noble/curves/secp256k1.js'
 import { parseAddress, toHex, fromHex } from '../../src/znn/primitives.ts'
 
 export function wrapMessage(o: {
@@ -53,10 +53,10 @@ export function unwrapMessage(o: {
 
 /** r||s||v, v in {0,1}, base64: the form Zenon stores and checks. */
 export function signTss(digest: Hex, privateKey: Uint8Array): string {
-  const sig = secp256k1.sign(fromHex(digest), privateKey)
+  const sig = secp256k1.Signature.fromBytes(secp256k1.sign(fromHex(digest), privateKey, { prehash: false, format: 'recovered' }), 'recovered')
   const out = new Uint8Array(65)
-  out.set(sig.toCompactRawBytes(), 0)
-  out[64] = sig.recovery
+  out.set(sig.toBytes('compact'), 0)
+  out[64] = sig.recovery!
   return Buffer.from(out).toString('base64')
 }
 
@@ -68,6 +68,6 @@ export function tssPublicKey(privateKey: Uint8Array, compressed = false): string
 /** The EVM address of an uncompressed secp256k1 public key (base64). */
 export function evmAddressOfPublicKey(base64: string): `0x${string}` {
   const raw = Uint8Array.from(Buffer.from(base64, 'base64'))
-  const body = raw.length === 65 ? raw.subarray(1) : secp256k1.ProjectivePoint.fromHex(raw).toRawBytes(false).subarray(1)
+  const body = raw.length === 65 ? raw.subarray(1) : secp256k1.Point.fromBytes(raw).toBytes(false).subarray(1)
   return `0x${keccak256(body).slice(-40)}`
 }

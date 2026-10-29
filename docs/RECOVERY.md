@@ -1,27 +1,104 @@
-# Original operation recovery
+# Unconfirmed sends
 
-Swap approvals and sends retain their original transaction fields plus the quoted assets, recipient, amount, minimum output and expiry as private recovery evidence. A confirmed swap journal entry authenticates the source transaction only. The stored quote and router-reported status do not prove delivery on the receiving chain. Preserve this metadata with the original hash; do not publish wallet exports or create a replacement signature to compensate for an uncertain destination outcome.
+Before it asks a wallet to sign, the page writes the send down: chain,
+account, contract, calldata and amount, in `bridge.operations.v1` in this
+browser. If the wallet never answers, the page still knows exactly what it
+asked for, and holds back the same send from that account and chain until the
+first one is accounted for. A wallet timeout, a lost reply or a missing receipt
+does not prove the send was rejected: it may still land.
 
-The interface saves the chosen chain, account, contract, calldata and amount in `bridge.operations.v1` before requesting a wallet signature. Secure-context Web Locks serialize wallet invocation across tabs; browsers without that support cannot sign. Other-tab records are merged, and unreviewed unresolved records pause new sends from that account and chain after a lock is released or a tab closes. The browser stores transaction evidence, never private keys or seed phrases.
+The browser keeps transaction details only, never keys or seed phrases.
 
-A wallet timeout, lost response or missing receipt does not prove rejection. Keep the original wallet operation and its exact hash. Do not approve a replacement, change nonce, re-sign, or infer a hash from a similar address-history entry. A late result is accepted only from the original request and is recorded against the original intent even if the current screen, account or chain has changed.
+```mermaid
+sequenceDiagram
+  participant P as Page
+  participant W as Wallet
+  participant C as Chain
 
-For an `unknown` operation with no reported hash, Activity also offers **Keep
-record and allow a different operation** after at least one minute. Close the
-original wallet prompt, check the wallet's pending transactions and history, then
-explicitly acknowledge that its outcome may still be pending. Another tab's
-active publication lock prevents this review. The action preserves the original
-unknown record, including across reload, and permits a different request. It does
-not prove nonpublication or mark the operation rejected or completed. The same
-encoded request and the same recorded swap economic intent remain blocked even
-with a fresh quote or different router. A later original hash restores the account
-pause until that exact transaction is reconciled. Known hashes and mismatches
-cannot use this path, and time passing alone never unlocks an account.
+  Note over P: writes the send down first
+  P->>W: sign and send
+  alt wallet returns a hash
+    W-->>P: hash
+    Note over P: Sent
+    P->>C: receipt?
+    C-->>P: confirmed or reverted
+  else wallet declines
+    W-->>P: rejected
+    Note over P: resolved, nothing was sent
+  else wallet signed something else
+    W-->>P: different details
+    Note over P: Differs, held until wallet support explains
+  else no reply
+    Note over P: No reply, same send held back
+    opt the wallet's history shows a hash
+      P->>C: Check with that hash
+      C-->>P: matching transaction, or none yet
+    end
+    opt no hash anywhere, after one minute
+      Note over P: Dismiss, once the box is ticked
+    end
+  end
+```
 
-In Activity, **Original operations** shows unresolved records. Select the original Zenon node/chain for a Zenon operation, or use an EVM reader on the original chain. If a hash was not returned, obtain the exact hash from the original wallet operation and enter it there. Reconciliation checks the transaction's account, chain and chosen fields. Zenon evidence must also match its computed hash, public key, signature and confirmation; EVM evidence must have a matching receipt on a canonical block and at least two confirmations. This short receipt check is not proof of bridge-service completion or irreversible network finality.
+## What to do
 
-`submitted` means an exact hash is known. `unknown` means the outcome needs reconciliation. `mismatch` means wallet evidence differs from the chosen fields and requires independent wallet/maintainer review; the interface cannot automatically clear it. `confirmed`, `reverted` and explicit wallet rejection resolve publication, but only the relevant contract state and bridge request can establish a transfer's later progress. A successful approval must establish allowance; liquidity completion must establish an LP balance increase; EVM redemption must establish its expected step.
+1. Open **Activity**. Sends the wallet never confirmed are listed under
+   **Unconfirmed**.
+2. Look for the send in the wallet's pending transactions and history.
+3. If the wallet shows a hash, paste it and press **Check**. The page accepts
+   it only if the transaction is the one it asked for: same account, chain,
+   contract, calldata and amount. A Zenon block must also match its computed
+   hash, public key, signature and confirmation. An EVM transaction needs a
+   receipt on a canonical block and two confirmations. That proves the send
+   landed, not that the bridge has finished the transfer.
+4. If the wallet shows nothing, close its prompt, wait a minute, tick **Not in
+   my wallet's pending or history** and press **Dismiss**. The record stays,
+   across reloads. The identical send stays held back, even with a fresh quote
+   or another router. A different send is allowed. If the original hash turns
+   up later, the hold comes back until that transaction is checked.
+5. Do not sign a replacement, change a nonce or send again to make up for an
+   unknown outcome. Do not take a hash from a similar entry in an address's
+   history: only the original wallet request's hash counts.
 
-Unreadable storage is preserved and sending is paused when the operation journal cannot be restored or saved. Keep a private export of the affected browser storage and original wallet evidence for recovery. Do not delete it to remove the warning. Do not publish that export: it can contain account addresses, amounts, recipients and endpoint details. Old activity records with no stored Zenon chain remain scoped to the configured build chain; manually establish their original chain before using them elsewhere.
+| Shown | Stored as | Means | What clears it |
+|---|---|---|---|
+| In wallet | `awaiting-wallet` | The wallet prompt is open | The wallet's reply |
+| No reply | `unknown` | The outcome is not known | Check with the hash, or Dismiss after a minute when there is none |
+| Sent | `submitted` | The hash is known, the receipt is not | Check |
+| Differs | `mismatch` | The wallet sent other details than the page asked for | Nothing in the page: wallet support and a maintainer |
 
-History is bounded to 100 pages of 100 entries per address. Changing counts or incomplete pages produce an explicit error. Exact operation reconciliation works independently of complete address history. Nonterminal identities are retained; only old terminal activity/journal records are bounded. Chain/account changes invalidate action readiness and cached reads. A fresh read is required before redeeming.
+Confirmed, reverted and declined sends leave the list. An approval must also
+show the allowance, adding liquidity must show the LP balance rise, and an EVM
+redeem must show its step, before the page treats them as done.
+
+## Another tab
+
+Web Locks keep two tabs from raising wallet prompts at once. A browser without
+them, or a page on plain HTTP, cannot sign. While another tab holds a prompt,
+Dismiss is refused until that prompt closes. A reply that arrives late is recorded against the
+original send, whichever screen, account or chain is showing by then.
+
+## When saved history can't be read
+
+Sending pauses. Activity then offers **Download and reset**: it saves the
+unreadable record to a file, then clears it, and sending resumes. Keep that
+file, and keep it private: it holds addresses, amounts, recipients and node
+details. The reset lifts the hold on anything the record held, so check the
+wallet's history before sending the same thing again. The button only appears
+when the stored record fails to read; a readable one is never offered it.
+
+## Swaps
+
+A swap's approval and send keep the quote with them: assets, recipient, amount,
+minimum out and expiry. A confirmed swap proves the source transaction only.
+The router's status is not a receipt on the receiving chain.
+
+## Limits
+
+Address history reads at most 100 pages of 100 entries. A count that changes
+while reading gives an error, not a partial list. Checking a send by its hash
+does not depend on that history. Unresolved sends are always kept; only old
+resolved ones are trimmed. Activity rows saved before the Zenon chain was
+recorded are taken to be on the build's chain; check their real chain before
+using them elsewhere. A change of chain or account drops cached reads, and a
+redeem needs a fresh read.

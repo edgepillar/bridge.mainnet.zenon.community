@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import { attachOwnedPostmortem, identityForPostmortem, ownedPostmortemController, requestOwnedPostmortem } from '../../e2e/lab/native-postmortem.mjs'
+import { attachOwnedPostmortem, identityForPostmortem, ownedPostmortemController, requestOwnedPostmortem, nativePostmortemRoles, nodePostmortemDirectory, requestOwnedNodePostmortem } from '../../e2e/lab/native-postmortem.mjs'
 import { summarizeGoroutines } from '../../e2e/lab/native-diagnostics.mjs'
 
 const identity=()=>identityForPostmortem({head:'1'.repeat(40),tree:'2'.repeat(40),build:{key:'3'.repeat(64),binaryHash:'4'.repeat(64),sourceCommit:'5'.repeat(40),sourceTree:'6'.repeat(40)}})
@@ -16,7 +16,7 @@ it('rejects foreign source, challenge, kind, PID fields and oversized requests b
  let signals=0
  const control=ownedPostmortemController({identity:identity(),challenge,signalRpc:()=>{signals++;return true}})
  const good=request()
- for(const value of [{...good,challenge:'00000000-1111-2222-3333-555555555555'},{...good,identity:{...good.identity,head:'7'.repeat(40)}},{...good,kind:'OTHER'},{...good,pid:987654321},{...good,identity:{...good.identity,binaryHash:['4'.repeat(64)]}}])expect(control.accept(JSON.stringify(value))).toBe(false)
+ for(const value of [{...good,challenge:'00000000-1111-2222-3333-555555555555'},{...good,identity:{...good.identity,head:'7'.repeat(40)}},{...good,identity:{...good.identity,nodeRole:'pillar2'}},{...good,kind:'OTHER'},{...good,pid:987654321},{...good,identity:{...good.identity,binaryHash:['4'.repeat(64)]}}])expect(control.accept(JSON.stringify(value))).toBe(false)
  expect(control.accept('x'.repeat(4097))).toBe(false);expect(control.accept('{')).toBe(false)
  expect(signals).toBe(0);expect(control.exited(2,null)).toBeNull()
 })
@@ -71,4 +71,34 @@ it('refuses oversized raw stderr before allocating or returning a capture',async
  const directory=temp()
  const owner=await attachOwnedPostmortem({directory,identity:identity(),signalRpc:()=>{setTimeout(()=>{fs.writeFileSync(path.join(directory,'rpc.log'),Buffer.alloc(2*1024*1024+1));owner.noteExit(2,null)},0);return true}});cleanups.push(()=>owner.close())
  await expect(requestOwnedPostmortem({directory,identity:identity()})).rejects.toThrow('file unavailable')
+})
+it('signals only the selected owned producer and returns that producer stderr',async()=>{
+ const root=temp(),signals=Object.fromEntries(nativePostmortemRoles.map(role=>[role,0]))
+ const raw='SIGQUIT: quit\n\ngoroutine 987654321 [chan receive]:\ngithub.com/zenon-network/go-zenon/protocol/downloader.(*Downloader).syncWithPeer(0x123, PRIVATE_ARGUMENT)\n\tPRIVATE_FILE.go:12 +0x12\n\n'
+ for(const nodeRole of nativePostmortemRoles){
+  const directory=nodePostmortemDirectory({directory:root,nodeRole,create:true}),bound={...identity(),nodeRole}
+  const owner=await attachOwnedPostmortem({directory,identity:bound,signalRpc:()=>{signals[nodeRole]++;setTimeout(()=>{fs.writeFileSync(path.join(root,nodeRole+'.log'),raw,{mode:0o600});owner.noteExit(2,null);owner.close()},0);return true}})
+  cleanups.push(()=>owner.close())
+ }
+ const captured=await requestOwnedNodePostmortem({directory:root,nodeRole:'pillar2',identity:{...identity(),nodeRole:'pillar2'}})
+ expect(captured).toBe(raw);expect(signals).toEqual({rpc:0,pillar:0,pillar2:1,pillar3:0,observer:0})
+ expect(JSON.stringify(summarizeGoroutines(captured))).not.toMatch(/PRIVATE|987654|0x/)
+ expect(fs.existsSync(path.join(root,'.postmortem/rpc/diagnostic-request.private.json'))).toBe(false)
+})
+it('refuses another node identity before any request file or signal',async()=>{
+ const root=temp(),directory=nodePostmortemDirectory({directory:root,nodeRole:'pillar2',create:true});let signals=0
+ const owner=await attachOwnedPostmortem({directory,identity:{...identity(),nodeRole:'pillar2'},signalRpc:()=>{signals++;return true}});cleanups.push(()=>owner.close())
+ await expect(requestOwnedNodePostmortem({directory:root,nodeRole:'pillar2',identity:identity()})).rejects.toThrow('node identity unavailable')
+ expect(signals).toBe(0);expect(fs.existsSync(path.join(directory,'diagnostic-request.private.json'))).toBe(false)
+})
+it('keeps the legacy RPC-only request from signaling a producer owner',async()=>{
+ const root=temp(),directory=nodePostmortemDirectory({directory:root,nodeRole:'pillar2',create:true});let signals=0
+ const bound={...identity(),nodeRole:'pillar2' as const},owner=await attachOwnedPostmortem({directory,identity:bound,signalRpc:()=>{signals++;return true}});cleanups.push(()=>owner.close())
+ await expect(requestOwnedPostmortem({directory,identity:bound,timeoutMs:100})).rejects.toThrow('RPC postmortem role unavailable')
+ expect(signals).toBe(0);expect(fs.existsSync(path.join(directory,'diagnostic-request.private.json'))).toBe(false)
+})
+it('preserves a linked per-node control directory instead of traversing it',()=>{
+ const root=temp(),foreign=temp();fs.symlinkSync(foreign,path.join(root,'.postmortem'))
+ expect(()=>nodePostmortemDirectory({directory:root,nodeRole:'pillar2',create:true})).toThrow('node directory unavailable')
+ expect(fs.lstatSync(path.join(root,'.postmortem')).isSymbolicLink()).toBe(true);expect(fs.readdirSync(foreign)).toEqual([])
 })

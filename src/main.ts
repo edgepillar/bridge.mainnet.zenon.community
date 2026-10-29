@@ -1,19 +1,24 @@
-import { createApp } from 'vue'
 import './style.css'
-import App from './App.vue'
-import { startNode, detectSyrius, node, syrius } from './state/zenon.ts'
-import { evm, startEvmDiscovery } from './state/evm.ts'
-import { bridge, startBridge } from './state/bridge.ts'
-import { readReferralFromUrl } from './state/referral.ts'
-import { activity, startActivity } from './state/activity.ts'
 
-readReferralFromUrl()
-void startNode().then(startBridge)
-startEvmDiscovery()
-void detectSyrius()
-startActivity()
+function framedByAnotherSite(): boolean {
+  try {
+    return window.top !== window.self && window.top!.location.origin !== location.origin
+  } catch {
+    return true
+  }
+}
 
-createApp(App).mount('#app')
-
-// The live stores, for the headless checks and the e2e harness. Dev builds only.
-if (import.meta.env.DEV) Object.assign(window, { __bridge: { bridge, node, syrius, evm, activity } })
+if (framedByAnotherSite()) {
+  const a = document.createElement('a')
+  a.href = location.href
+  a.target = '_top'
+  a.rel = 'noopener'
+  a.className = 'link'
+  a.textContent = 'Open the bridge in its own tab'
+  const p = document.createElement('p')
+  p.style.cssText = 'padding:24px;font:15px system-ui,sans-serif'
+  p.append(a)
+  document.getElementById('app')!.replaceChildren(p)
+} else {
+  void import('./app.ts')
+}

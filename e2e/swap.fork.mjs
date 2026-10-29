@@ -73,7 +73,7 @@ try {
   await p.evaluateOnNewDocument(installWallet, { account: ME })
   await p.goto(server.resolvedUrls.local[0])
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-  const text = (sel) => p.$eval(sel, (e) => e.innerText.replace(/\s*\n\s*/g, ' / ').trim())
+  const text = (sel) => p.$eval(sel, (e) => (e instanceof HTMLInputElement ? e.value : e.innerText).replace(/\s*\n\s*/g, ' / ').trim())
   const maybe = (sel) => text(sel).catch(() => '')
   const closed = () => p.waitForFunction(() => !document.querySelector('[role="dialog"]'))
   const action = () => text('[data-testid="bridge-action"]')
@@ -143,7 +143,7 @@ try {
   check('Swap mode offers EVM assets only, with no filter', from.pills === 0 && !from.options.some((o) => o.includes('Zenon')) && from.options.some((o) => o.includes('BNB Chain')), JSON.stringify(from.options))
   await setAmount('0.05')
   await waitAction('Connect EVM wallet')
-  await p.waitForFunction(() => document.querySelector('[data-testid="bridge-receive"]').innerText.trim() !== '0.00', { timeout: 30000 })
+  await p.waitForFunction(() => !['', '0', '0.00'].includes(document.querySelector('[data-testid="bridge-receive"]').value), { timeout: 30000 })
   await p.waitForSelector('[data-testid="bridge-to-usd"]', { timeout: 20000 })
   check('quotes with no wallet', true, `receive ${await text('[data-testid="bridge-receive"]')} wZNN, ${await text('[data-testid="swap-via"]')}, ${await usd()}`)
 

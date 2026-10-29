@@ -32,6 +32,12 @@ their root license. An authorized maintainer must still accept provenance,
 applicable terms and the final distribution under task 28. Retain the notice
 directory with the accepted artifact.
 
+When the lockfile changes, refresh `DEPENDENCY_LICENSES.json` from matching,
+source-qualified build notice manifests. Preserve the observed source, run,
+attempt, artifact and lock identities. Never copy a new locked version into an
+installed-version claim from a stale local installation. Schema 2 records the
+CI-observed notice version explicitly; earlier inventories remain in Git history.
+
 ## Decisions reserved to maintainers
 
 An authorized administrator must select actual code owners and required reviewers,

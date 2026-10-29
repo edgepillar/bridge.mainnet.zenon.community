@@ -1,9 +1,23 @@
 // Fixed-schema facts only. Raw logs and profiles can contain peer data, paths
 // and pointer arguments and must never enter qualification artifacts.
+import { downloaderPhaseReset } from './downloader-phase-reset.mjs'
 const sha=/^[0-9a-f]{40}$/
 const digest=/^[0-9a-f]{64}$/
 const object=v=>v&&typeof v==='object'&&!Array.isArray(v)?v:{}
 const natural=n=>Number.isSafeInteger(n)&&n>=0
+const rolePorts=[['pillar',47100],['pillar2',47101],['pillar3',47102],['observer',47103],['rpc',46997]]
+export function nativeFailureTarget(nodes){
+ if(!Array.isArray(nodes)||nodes.length!==rolePorts.length)return null
+ const records=rolePorts.map(([nodeRole,port])=>{
+  const matches=nodes.filter(n=>object(n).port===port)
+  if(matches.length!==1)return null
+  const n=matches[0]
+  return n.error===null&&n.chainId===322&&natural(n.height)&&n.height>=1?{nodeRole,port,frontierHeight:n.height}:null
+ })
+ if(records.some(n=>n===null))return null
+ // A fixed role order resolves equal minima without trusting a request-supplied target.
+ return records.reduce((lowest,n)=>n.frontierHeight<lowest.frontierHeight?n:lowest)
+}
 const messages=new Map([
   ['looking for common ancestor','ANCESTOR_SEARCH'],['common ancestor','ANCESTOR_FOUND'],
   ['Block synchronisation started','SYNC_STARTED'],['Synchronization completed','SYNC_REPORTED_COMPLETE'],
@@ -38,31 +52,49 @@ export function summarizeSyncLog(text){
   }
   return {counts,events,truncated}
 }
-export function summarizeGoroutines(text){
+export function summarizeGoroutines(text,sourceCommit=null,downloaderHash=downloaderPhaseReset.originalSha256){
   if(Buffer.byteLength(text)>2*1024*1024)throw new Error('Native profile bound exceeded')
   const groups=new Map();let observed=0,truncated=false
   for(const block of text.split(/\n\n/)){
     const header=block.match(/^goroutine \d+(?: [^\n[\]]{1,160})? \[([^\]\n]{1,160})\]:/);if(!header)continue
     if(++observed>2048){truncated=true;break}
     const state=/semacquire|Mutex\.(?:R?Lock)/.test(header[1])?'LOCK_WAIT':/chan send/.test(header[1])?'CHANNEL_SEND':/chan receive/.test(header[1])?'CHANNEL_RECEIVE':/IO wait/.test(header[1])?'IO_WAIT':/^select/.test(header[1])?'SELECT':/^running/.test(header[1])?'RUNNING':/^runnable/.test(header[1])?'RUNNABLE':/^sleep/.test(header[1])?'SLEEP':'OTHER'
-    const frames=[]
-    for(const line of block.split('\n').slice(1)){
+    const frames=[];let waitSite
+    const lines=block.split('\n').slice(1)
+    for(const [index,line] of lines.entries()){
       const at=line.lastIndexOf('(');if(at<0)continue;const frame=line.slice(0,at)
       if(frame.length<=180&&/^(?:github\.com\/zenon-network\/go-zenon\/[A-Za-z0-9_./-]+\.(?:\(\*?[A-Za-z0-9_]+\)\.)?[A-Za-z0-9_.$]+|(?:runtime|sync|internal\/sync)\.(?:\(\*?[A-Za-z0-9_]+\)\.)?[A-Za-z0-9_.$]+)$/.test(frame)){
         if(frames.length<24)frames.push(frame);else truncated=true
+        // Only this exact source has the reviewed line-to-branch mapping.
+        // Paths and offsets remain private; publish a fixed semantic category.
+        if(sourceCommit===downloaderPhaseReset.sourceCommit&&[downloaderPhaseReset.originalSha256,downloaderPhaseReset.patchedSha256].includes(downloaderHash)){
+          const location=lines[index+1]?.match(/^\s+[^\r\n]*\/protocol\/downloader\/downloader\.go:(\d+)(?:\s|$)/)
+          const sourceLine=location?Number(location[1])-(downloaderHash===downloaderPhaseReset.patchedSha256?2:0):null
+          if(frame==='github.com/zenon-network/go-zenon/protocol/downloader.(*Downloader).fetchHashes'){
+            if(sourceLine===548)waitSite='HASH_COMPLETION_HANDOFF'
+            else if(sourceLine===532)waitSite='HASH_REPLY_OR_TIMEOUT'
+          }else if(frame==='github.com/zenon-network/go-zenon/protocol/downloader.(*Downloader).syncWithPeer'){
+            if(sourceLine===336)waitSite='SYNC_JOIN_AFTER_FIRST_SUCCESS'
+            else if(sourceLine===330)waitSite='SYNC_JOIN_FIRST_WORKER'
+          }
+        }
       }
     }
     if(!frames.some(x=>x.startsWith('github.com/zenon-network/go-zenon/')))continue
-    const key=JSON.stringify({state,frames});if(!groups.has(key)){if(groups.size>=64){truncated=true;continue}groups.set(key,{state,frames,count:0})}groups.get(key).count++
+    const site=waitSite?{waitSite}:{}
+    const key=JSON.stringify({state,frames,...site});if(!groups.has(key)){if(groups.size>=64){truncated=true;continue}groups.set(key,{state,frames,...site,count:0})}groups.get(key).count++
   }
   return {status:observed?'CAPTURED':'UNAVAILABLE',observed,groups:[...groups.values()],truncated}
 }
-export async function collectNativeFailureFacts({runtime,build,head,tree,readProfile,readLogs}){
+export async function collectNativeFailureFacts({runtime,build,head,tree,nodeRole='rpc',readProfile,readLogs}){
   const r=object(runtime),b=object(build),d=object(r.diagnostics)
   const mode=d.profileMode??'loopback',profileOwner=mode==='loopback'?d.profileHost==='127.0.0.1'&&d.profilePort===47210:mode==='postmortem'&&d.profileHost===null&&d.profilePort===null
-  if(!sha.test(head??'')||!sha.test(tree??'')||!digest.test(b.key??'')||!digest.test(b.binaryHash??'')||!sha.test(b.sourceCommit??'')||!sha.test(b.sourceTree??'')||r.bridgeSourceCommit!==head||r.bridgeSourceTree!==tree||r.buildKey!==b.key||r.znndHash!==b.binaryHash||r.sourceCommit!==b.sourceCommit||r.sourceTree!==b.sourceTree||!profileOwner||!['error','info'].includes(d.rpcLogLevel))return {status:'OWNER_SCOPE_UNAVAILABLE'}
+  const roles=rolePorts.map(([role])=>role),declared=d.postmortemRoles
+  const nodeOwner=roles.includes(nodeRole)&&(nodeRole==='rpc'||Array.isArray(declared)&&declared.length===5&&new Set(declared).size===5&&roles.every(role=>declared.includes(role)))
+  if(!sha.test(head??'')||!sha.test(tree??'')||!digest.test(b.key??'')||!digest.test(b.binaryHash??'')||!sha.test(b.sourceCommit??'')||!sha.test(b.sourceTree??'')||r.bridgeSourceCommit!==head||r.bridgeSourceTree!==tree||r.buildKey!==b.key||r.znndHash!==b.binaryHash||r.sourceCommit!==b.sourceCommit||r.sourceTree!==b.sourceTree||!profileOwner||!nodeOwner||!['error','info'].includes(d.rpcLogLevel))return {status:'OWNER_SCOPE_UNAVAILABLE'}
   let profile={status:'UNAVAILABLE'},logs={status:'UNAVAILABLE'}
-  try{profile=summarizeGoroutines(await readProfile())}catch{/* Unavailable is not evidence of a healthy importer. */}
+  const mappedSource=[downloaderPhaseReset.originalSha256,downloaderPhaseReset.patchedSha256].includes(b.downloaderSourceHash)?b.sourceCommit:null
+  try{profile=summarizeGoroutines(await readProfile(),mappedSource,b.downloaderSourceHash??null)}catch{/* Unavailable is not evidence of a healthy importer. */}
   try{logs=await readLogs()}catch{/* No raw filesystem or peer error is retained. */}
-  return {status:profile.status==='CAPTURED'?'CAPTURED':'PARTIAL',profileMode:mode,rpcLogLevel:d.rpcLogLevel,coldCase:['error-a','error-b','info'].includes(d.coldCase)?d.coldCase:'manual',profile,logs}
+  return {status:profile.status==='CAPTURED'?'CAPTURED':'PARTIAL',nodeRole,profileMode:mode,captureMode:nodeRole==='rpc'?mode:'postmortem',rpcLogLevel:d.rpcLogLevel,coldCase:['error-a','error-b','info'].includes(d.coldCase)?d.coldCase:'manual',profile,logs}
 }

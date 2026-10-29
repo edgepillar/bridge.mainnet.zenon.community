@@ -1,19 +1,26 @@
-// Read-only smoke qualification of compiled assets and the actual HTML CSP.
+// Prepare the isolated fixture, then qualify compiled assets and the HTML CSP read-only.
 // No wallet is injected and the only RPC endpoints are the isolated lab.
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { gzipSync } from 'node:zlib'
+import type { Readable } from 'node:stream'
 import { afterAll, beforeAll, expect, it } from 'vitest'
 import { build, preview, type PreviewServer } from 'vite'
 import puppeteer, { type Browser, type Page } from 'puppeteer-core'
-import { assertLab } from './lib/lab.ts'
+import { setup } from './setup.ts'
 import { socketFailureClass } from './lib/socket-evidence.ts'
 import { summarizeNetLog, summarizeNativeLog } from './lib/transport-diagnostics.ts'
 import { browserProcessEvidence } from './lib/browser-process-evidence.ts'
+import { browserStderrEvidence } from './lib/browser-stderr-evidence.ts'
+import { browserTerminationEvidence } from './lib/browser-termination-evidence.ts'
+import { browserMemoryEvidence } from './lib/browser-memory-evidence.ts'
+import { browserSignalEvidence } from './lib/browser-signal-evidence.ts'
+import { directNetworkPolicy,fixtureConnectPolicy,fixtureRequestAllowed } from './lib/browser-network-policy.mjs'
 
 const outDir='e2e/.state/browser-build', origin='http://127.0.0.1:5195'
+const fixtureOrigins=[origin,'http://127.0.0.1:46545','http://127.0.0.1:46997','ws://127.0.0.1:46998']
 const netLogFile='e2e/.state/compiled-netlog.private.json'
 let server: PreviewServer, browser: Browser, page: Page
 const errors:string[]=[], outbound:string[]=[], scripts=new Set<string>(), violations:string[]=[]
@@ -21,12 +28,21 @@ let initialScripts:string[]=[]
 let noticeEvidence={verified:false,packages:0,files:0,manifestSha256:''}
 let processEvidence: Awaited<ReturnType<typeof browserProcessEvidence>>, browserRevision: string | null = null
 const pendingProcessEvidence: Promise<void>[] = []
+let terminationEvidence:Awaited<ReturnType<typeof browserTerminationEvidence>>|undefined
+let memoryEvidence:ReturnType<typeof browserMemoryEvidence>|undefined
+let signalEvidence:Awaited<ReturnType<typeof browserSignalEvidence>>|undefined
+let stderrEvidence = browserStderrEvidence(false)
+let ownedBrowserStderr: Readable | null | undefined
+const captureBrowserStderr = (chunk: Buffer) => stderrEvidence.ingest(chunk)
+const captureBrowserStderrError = () => stderrEvidence.captureReadError()
 // Keep bounded transport facts, never handshake headers or raw RPC frames.
 const socketEvidence:{allowed:boolean;status:number|null;error:boolean;closed:boolean;frontier:{chainId:number;height:number}|null;
   createdMs:number;handshakeMs:number|null;errorMs:number|null;closedMs:number|null;frontierMs:number|null;failureClass:string|null;frontierRequests:number}[]=[]
 const sha=(data:Buffer)=>crypto.createHash('sha256').update(data).digest('hex')
 beforeAll(async()=>{
-  await assertLab()
+  // Vitest may run this file first by size or a cached failure. Establish the
+  // committed loopback fixture here instead of relying on another test file.
+  await setup()
   if(!process.env.CHROME_PATH)throw new Error('Set CHROME_PATH to the pinned browser')
   process.env.VITE_NETWORK='devnet'
   // Vitest sets NODE_ENV=test; that would otherwise retain development stores.
@@ -34,14 +50,20 @@ beforeAll(async()=>{
   process.env.NODE_ENV='production'
   try { await build({envDir:false,logLevel:'error',mode:'production',build:{outDir,emptyOutDir:true}}) }
   finally { if(previousNodeEnv===undefined)delete process.env.NODE_ENV;else process.env.NODE_ENV=previousNodeEnv }
-  server=await preview({envDir:false,logLevel:'error',build:{outDir},preview:{host:'127.0.0.1',port:5195,strictPort:true}})
+  server=await preview({envDir:false,logLevel:'error',build:{outDir},preview:{host:'127.0.0.1',port:5195,strictPort:true,headers:{'Content-Security-Policy':fixtureConnectPolicy(fixtureOrigins)}}})
+  memoryEvidence=browserMemoryEvidence()
   browser=await puppeteer.launch({executablePath:process.env.CHROME_PATH,headless:true,args:['--log-net-log='+path.resolve(netLogFile)]})
+  ownedBrowserStderr=browser.process()?.stderr
+  stderrEvidence=browserStderrEvidence(!!ownedBrowserStderr)
+  ownedBrowserStderr?.on('data',captureBrowserStderr)
+  ownedBrowserStderr?.on('error',captureBrowserStderrError)
   if(process.env.EXPECTED_BROWSER_VERSION)expect((await browser.version()).endsWith(process.env.EXPECTED_BROWSER_VERSION)).toBe(true)
   page=await browser.newPage()
   const browserSession=await browser.target().createCDPSession()
   const version=await browserSession.send('Browser.getVersion')
   browserRevision=/^@[0-9a-f]{40}$/.test(version.revision)?version.revision:null
   processEvidence=await browserProcessEvidence(()=>browserSession.send('SystemInfo.getProcessInfo'))
+  terminationEvidence=await browserTerminationEvidence(()=>browserSession.send('Browser.getHistograms',{query:'ChildProcess.',delta:false}),browserRevision)
   page.on('pageerror',(error)=>errors.push(String(error)))
   page.on('console',(message)=>{if(message.type()==='error')errors.push(message.text())})
   // The fixture controls only the selected loopback socket. Production assets
@@ -66,6 +88,7 @@ beforeAll(async()=>{
   const sockets=new Map<string,{evidence:typeof socketEvidence[number];frontiers:Set<number>}>()
   const started=performance.now(),elapsed=()=>Math.round(performance.now()-started)
   await session.send('Network.enable')
+  await session.send('Network.setBlockedURLs',directNetworkPolicy(fixtureOrigins))
   session.on('Network.webSocketCreated',({requestId,url})=>{
     if(socketEvidence.length>=16){errors.push('Compiled browser exceeded the WebSocket evidence bound');return}
     const evidence={allowed:url==='ws://127.0.0.1:46998/',status:null as number|null,error:false,closed:false,frontier:null as {chainId:number;height:number}|null,
@@ -78,7 +101,7 @@ beforeAll(async()=>{
   })
   session.on('Network.webSocketFrameError',({requestId,errorMessage})=>{
     const socket=sockets.get(requestId);if(socket){socket.evidence.error=true;socket.evidence.errorMs=elapsed();socket.evidence.failureClass=socketFailureClass(errorMessage)}
-    if(socket?.evidence.allowed){const diagnostic=processEvidence.captureFailure();if(pendingProcessEvidence.length<8)pendingProcessEvidence.push(diagnostic)}
+    if(socket?.evidence.allowed){terminationEvidence?.markFailure();const diagnostic=processEvidence.captureFailure();if(pendingProcessEvidence.length<8)pendingProcessEvidence.push(diagnostic)}
   })
   session.on('Network.webSocketFrameSent',({requestId,response})=>{
     const socket=sockets.get(requestId);if(!socket||response.payloadData.length>64*1024)return
@@ -107,23 +130,36 @@ beforeAll(async()=>{
   })
   await page.exposeFunction('__labPolicyViolation',(directive:string)=>violations.push(directive))
   await page.evaluateOnNewDocument(()=>document.addEventListener('securitypolicyviolation',(event)=>(window as any).__labPolicyViolation(event.effectiveDirective)))
-  await page.setRequestInterception(true)
   page.on('request',(request)=>{
-    const url=new URL(request.url())
-    if(url.hostname==='127.0.0.1'||url.protocol==='data:')void request.continue()
-    else{outbound.push(url.origin);void request.abort()}
+    if(!fixtureRequestAllowed(request.url(),fixtureOrigins))outbound.push('UNEXPECTED_HTTP_ENDPOINT')
   })
   page.on('response',(response)=>{const url=new URL(response.url());if(url.origin===origin&&url.pathname.endsWith('.js'))scripts.add(url.pathname)})
+  signalEvidence=await browserSignalEvidence(browser.process()?.pid,()=>browserSession.send('SystemInfo.getProcessInfo'))
   await page.goto(origin,{waitUntil:'networkidle0'})
   await page.waitForFunction(()=>document.body.innerText.includes('Anvil'),{timeout:60_000})
   initialScripts=[...scripts].sort()
 })
 afterAll(async()=>{
-  const browserVersion=await browser?.version(),socketSnapshot=JSON.parse(JSON.stringify(socketEvidence))
+  let browserVersion: string | null = null
+  try { browserVersion=await browser?.version()??null } catch { /* Preserve evidence even if the owned browser exited. */ }
+  const socketSnapshot=JSON.parse(JSON.stringify(socketEvidence))
   const errorSnapshot=[...errors],outboundSnapshot=[...outbound],violationSnapshot=[...violations],loadedScriptNames=[...scripts].sort()
   await Promise.all(pendingProcessEvidence)
+  await terminationEvidence?.captureAfterFailures()
+  if(socketSnapshot.some((socket:typeof socketEvidence[number])=>socket.error))memoryEvidence?.captureAfterFailure()
+  const browserMemoryDiagnostics=memoryEvidence?.report()??{status:'UNAVAILABLE'}
+  const browserTerminationDiagnostics=terminationEvidence?.report()??{status:'UNAVAILABLE'}
   const browserProcessDiagnostics=processEvidence?.report()??{status:'UNAVAILABLE'}
-  await browser?.close()
+  const browserStderrDiagnostics=stderrEvidence.report()
+  await signalEvidence?.stop()
+  const browserSignalDiagnostics=signalEvidence?.report()??{status:'UNAVAILABLE'}
+  const child=browser?.process()
+  const ownedBrowserState=child ? {status:child.exitCode===null&&child.signalCode===null?'RUNNING':'EXITED',
+    exitCode:child.exitCode,signal:child.signalCode===null?null:['SIGKILL','SIGTERM','SIGABRT','SIGSEGV'].includes(child.signalCode)?child.signalCode:'OTHER'} : {status:'UNAVAILABLE'}
+  let browserCloseStatus: 'COMPLETE' | 'UNAVAILABLE' | 'FAILED' = 'UNAVAILABLE'
+  try { await browser?.close();browserCloseStatus=browser?'COMPLETE':'UNAVAILABLE' }
+  catch { browserCloseStatus='FAILED' }
+  finally { ownedBrowserStderr?.off('data',captureBrowserStderr);ownedBrowserStderr?.off('error',captureBrowserStderrError) }
   let transportEvidence:ReturnType<typeof summarizeNetLog>|{status:'UNAVAILABLE'}={status:'UNAVAILABLE'}
   const nativeDiagnostics:Record<string,unknown>={}
   try{
@@ -140,10 +176,11 @@ afterAll(async()=>{
   }
   const report={mode:'isolated read-only production bundle',network:'devnet',sourceCommit:execFileSync('git',['rev-parse','HEAD']).toString().trim(),
     sourceTree:execFileSync('git',['rev-parse','HEAD^{tree}']).toString().trim(),lockfileHash:sha(fs.readFileSync('package-lock.json')),
-    sourceDirty:execFileSync('git',['status','--porcelain']).toString().trim().length>0,browserVersion,browserRevision,browserProcessDiagnostics,errors:errorSnapshot,outbound:outboundSnapshot,violations:violationSnapshot,
+    sourceDirty:execFileSync('git',['status','--porcelain']).toString().trim().length>0,browserVersion,browserRevision,browserProcessDiagnostics,browserTerminationDiagnostics,browserMemoryDiagnostics,browserStderrDiagnostics,browserSignalDiagnostics,ownedBrowserState,browserCloseStatus,networkPolicy:{mode:'DIRECT_NETWORK_DEFAULT_BLOCK_AND_FIXTURE_CONNECT_HEADER',fetchInterception:false,origins:fixtureOrigins},errors:errorSnapshot,outbound:outboundSnapshot,violations:violationSnapshot,
     initialScripts:initialScripts.map((name)=>{const bytes=fs.readFileSync(path.join(outDir,name));return {name,bytes:bytes.length,gzipBytes:gzipSync(bytes).length,sha256:sha(bytes)}}),loadedScriptNames,noticeEvidence,socketEvidence:socketSnapshot,transportEvidence,nativeDiagnostics}
   fs.mkdirSync('.browser-results',{recursive:true});fs.writeFileSync('.browser-results/built-report.json',JSON.stringify(report,null,2)+'\n')
   await new Promise<void>((resolve)=>server?.httpServer.close(()=>resolve())??resolve())
+  expect(browserCloseStatus).not.toBe('FAILED')
   expect(transportEvidence.status).toBe('COMPLETE')
   if('connections' in transportEvidence)expect(transportEvidence.connections.length).toBeGreaterThan(0)
 })
@@ -178,9 +215,10 @@ it('retains exact locked dependency and font notice bytes in the compiled distri
 
 it('keeps compiled views within a mobile viewport with disconnected wallets',async()=>{
   await page.setViewport({width:375,height:900})
+  const headings:Record<string,string>={'':'Bridge',activity:'Activity',liquidity:'Liquidity',stats:'Status',affiliate:'Referral'}
   for(const route of ['','activity','liquidity','stats','affiliate']) {
     await page.evaluate((value)=>{location.hash='#/'+value},route)
-    await page.waitForFunction((value)=>document.querySelector('h1')?.textContent?.trim()===value,{},route?route[0].toUpperCase()+route.slice(1):'Bridge')
+    await page.waitForFunction((value)=>document.querySelector('h1')?.textContent?.trim()===value,{},headings[route])
     expect(await page.evaluate(()=>document.documentElement.scrollWidth-innerWidth)).toBe(0)
   }
   expect(errors).toEqual([]);expect(outbound).toEqual([]);expect(violations).toEqual([])

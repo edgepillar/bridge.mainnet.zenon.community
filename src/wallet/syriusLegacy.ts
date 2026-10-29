@@ -7,7 +7,6 @@
 //   znn.sendAccountBlockToSend     -> znn.accountBlockSent {signedTransaction}
 //                                     | znn.deniedSendAccountBlock
 //
-// Used only when window.zenon says it is Syrius but has no sendAccountBlock.
 
 import { WalletError } from './syrius.ts'
 
@@ -20,8 +19,18 @@ interface Granted {
 type ZenonFlag = { isSyriusExtension?: boolean; sendAccountBlock?: unknown }
 
 export function legacyPresent(): boolean {
-  const z = (typeof window !== 'undefined' ? (window as unknown as { zenon?: ZenonFlag }).zenon : undefined) ?? null
-  return Boolean(z?.isSyriusExtension) && typeof z?.sendAccountBlock !== 'function'
+  if (typeof window === 'undefined') return false
+  const z = (window as unknown as { zenon?: ZenonFlag }).zenon ?? null
+  if (typeof z?.sendAccountBlock === 'function') return false
+  return Boolean(z?.isSyriusExtension) || legacyMark()
+}
+
+function legacyMark(): boolean {
+  if (typeof document === 'undefined') return false
+  for (const s of document.querySelectorAll('script:not([src])')) {
+    if (/window\.zenon\.isSyriusExtension\s*=\s*true/.test(s.textContent ?? '')) return true
+  }
+  return false
 }
 
 function exchange<T>(send: { method: string; params?: unknown }, ok: string, denied: string, timeoutMs: number): Promise<T> {

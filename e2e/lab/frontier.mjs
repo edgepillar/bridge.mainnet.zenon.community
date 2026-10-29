@@ -123,18 +123,20 @@ if (args.includes('--native') || args.includes('--docker')) {
         report.nativeFailure = { status: 'OWNER_SCOPE_UNAVAILABLE' }
         try {
           const { verifiedBuild } = await import('./verify-build.mjs')
-          const { collectNativeFailureFacts, summarizeSyncLog } = await import('./native-diagnostics.mjs')
+          const { collectNativeFailureFacts, summarizeSyncLog, nativeFailureTarget } = await import('./native-diagnostics.mjs')
           const root = new URL('./.build/native/', import.meta.url)
           const directory = (url) => { const s = fs.lstatSync(url); if (!s.isDirectory() || s.isSymbolicLink()) throw new Error('Diagnostic directory unavailable') }
           directory(new URL('./.build/', import.meta.url)); directory(root)
           const runtimeFile = new URL('run-manifest.json', root), info = fs.lstatSync(runtimeFile)
           if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.size > 64 * 1024) throw new Error('Diagnostic runtime identity unavailable')
           const runtime = JSON.parse(fs.readFileSync(runtimeFile)), build = verifiedBuild('native')
-          report.nativeFailure = await collectNativeFailureFacts({ runtime, build, head: report.sourceCommit, tree: report.sourceTree,
+          const target=nativeFailureTarget(nodes)
+          if(!target)throw new Error('Native diagnostic target unavailable')
+          report.nativeFailure = await collectNativeFailureFacts({ runtime, build, head: report.sourceCommit, tree: report.sourceTree, nodeRole: target.nodeRole,
             readProfile: async () => {
-              if (runtime.diagnostics?.profileMode === 'postmortem') {
-                const { requestOwnedPostmortem, identityForPostmortem } = await import('./native-postmortem.mjs')
-                return requestOwnedPostmortem({ directory: fileURLToPath(root), identity: identityForPostmortem({ head: report.sourceCommit, tree: report.sourceTree, build }) })
+              if (target.nodeRole !== 'rpc' || runtime.diagnostics?.profileMode === 'postmortem') {
+                const { requestOwnedNodePostmortem, identityForPostmortem } = await import('./native-postmortem.mjs')
+                return requestOwnedNodePostmortem({ directory: fileURLToPath(root), nodeRole: target.nodeRole, identity: identityForPostmortem({ head: report.sourceCommit, tree: report.sourceTree, build, nodeRole: target.nodeRole }) })
               }
               const r = await fetch('http://127.0.0.1:47210/debug/pprof/goroutine?debug=2', { signal: AbortSignal.timeout(3000) })
               if (!r.ok || !r.body) throw new Error('Profile unavailable')
@@ -162,6 +164,7 @@ if (args.includes('--native') || args.includes('--docker')) {
               return result
             },
           })
+          report.nativeFailure.target=target
         } catch { /* Never query an unestablished diagnostic owner. */ }
       }
       record()

@@ -74,6 +74,26 @@ The choice is stored with the chain identifier it was confirmed for. It is
 restored on a later visit only while Syrius still names that node and the node
 is still on that chain; otherwise the page goes back to the default and says so.
 
+### A node the user adds
+
+The Node menu also takes an address. It goes through the same confirmation: the
+page asks the node for its frontier momentum, names the network from the chain
+identifier and waits for the user to accept it. The address must be `wss://`,
+or `ws://` to `localhost` or `127.0.0.1`: a plain `ws://` to another host would
+let anyone on the path change what the page reads, and the CSP refuses it
+anyway. `https://` and `http://` are rewritten to `wss://` and `ws://`, a bare
+host becomes `wss://`, and an address with credentials, a query or a fragment
+is refused.
+
+Up to eight confirmed nodes are listed (`bridge.nodes`, each with its chain
+identifier). Picking a listed node that still reports the same chain switches
+at once; a node now on another chain is confirmed again. The selected node
+(`bridge.node.custom`) is restored on load when it answers on the same chain.
+If it answers on another chain the selection is dropped and the page says so;
+if it does not answer, the page reads from the default for this visit and keeps
+the selection for the next. The user's node and the Syrius node exclude each
+other, and "default" in the menu clears both.
+
 
 ## Any chain
 
@@ -101,7 +121,9 @@ is derived from the chain:
 
 The verdict, in order: halted, key generation, stalled (6 h), delayed (1 h),
 online (a signature in the last 24 h), idle. Halted, key generation and
-stalled show the red banner on every page. The Advanced "Send anyway" switch
+stalled show the red banner on every page but Status, in the same words the
+action button uses: "Bridge is halted", "New key in progress", "Bridge is
+stalled". The form carries no second note. The Advanced "Send anyway" switch
 overrides only a health warning; halted contracts and configuration/identity
 guards still block writes. Thresholds are in `src/core/orchestrators.ts`.
 
@@ -249,6 +271,18 @@ terms are not asked for, the time shown is the quote's (seconds, not the
 bridge's half hour), the recipient is an EVM address and can still be a custom
 one, the bridge-down block does not apply, and the details list the route, the
 minimum received and the fee in dollars.
+
+Either amount can be typed. Typing the amount to receive fills in the amount
+to send. On a bridge leg that is the fee or bonus worked backwards: the
+smallest amount that delivers it, moved to the roundest amount that delivers
+the same (2 rather than 1.99999999 for 1.94 after 3%). The routers only price
+an input, so a swap prices a first guess (the rate of the last quote for the
+pair, else dollar prices, else one whole token), scales the input by the rate
+that comes back and asks again, at most four times, until the output covers
+the typed amount by no more than 0.1%. Inputs are rounded up to six
+significant digits. That last quote is the one shown and sent; it is not
+asked for again when its input lands in the amount box. It usually takes two
+quotes.
 
 Limits. The quote is asked for when an input settles, not on a timer: the
 routers are unkeyed and rate limited (LI.FI allows 75 quotes per two hours).
