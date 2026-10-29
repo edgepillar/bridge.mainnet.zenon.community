@@ -519,6 +519,7 @@ export const syrius = reactive({
 })
 
 export const wrongZenonChain = () => syrius.address !== null && (syrius.chainId === null || node.chainId === 0 || syrius.chainId !== node.chainId)
+export const zenonChainMismatch = () => syrius.address !== null && syrius.chainId !== null && node.chainId !== 0 && syrius.chainId !== node.chainId
 
 async function applyWalletState(s: syriusWallet.WalletState, request: number) {
   if (request !== walletEpoch) return

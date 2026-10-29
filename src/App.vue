@@ -9,7 +9,7 @@ import StatusChip from './components/StatusChip.vue'
 import zenonMark from './assets/zenon.svg'
 import { route, NAV, go, type Route } from './state/router.ts'
 import { theme, toggleTheme } from './state/theme.ts'
-import { node, syrius, wrongZenonChain, hostOf, chainId, networkLabel, requestWalletNode, walletNode, checkSyriusNetwork } from './state/zenon.ts'
+import { node, syrius, zenonChainMismatch, hostOf, chainId, networkLabel, requestWalletNode, walletNode, checkSyriusNetwork } from './state/zenon.ts'
 import { bridge, bridgeDown, transferBlocker } from './state/bridge.ts'
 import { referrer, clearReferral } from './state/referral.ts'
 import { actionCount } from './state/activity.ts'
@@ -41,6 +41,14 @@ watch(
 const noticeHidden = ref(false)
 // Closing the bridge banner holds until the bridge's state changes or the page is loaded again. The chip in the header stays.
 const downHidden = ref(false)
+
+const chainMismatch = ref(false)
+let mismatchTimer: ReturnType<typeof setTimeout> | undefined
+watch(zenonChainMismatch, (now) => {
+  clearTimeout(mismatchTimer)
+  if (!now) chainMismatch.value = false
+  else mismatchTimer = setTimeout(() => (chainMismatch.value = zenonChainMismatch()), 1500)
+}, { immediate: true })
 
 // A banner that comes or goes opens or closes its own height, gap included,
 // in step with the page fade. Removed at once, it moved everything under it
@@ -170,7 +178,7 @@ const status = computed(() => {
           <button class="btn btn-sm -my-1" @click="checkSyriusNetwork">Check network</button>
         </template>
       </Banner>
-      <Banner v-else-if="wrongZenonChain()" key="wrong-chain" tone="wait">
+      <Banner v-else-if="chainMismatch" key="wrong-chain" tone="wait">
         <span class="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
           <span>Syrius</span><span class="chip chip-dim mono">{{ zenonNetworkName(syrius.chainId!) }} {{ syrius.chainId }}</span>
           <span>Page</span><span class="chip chip-dim mono">{{ networkLabel() }} {{ chainId() }}</span>

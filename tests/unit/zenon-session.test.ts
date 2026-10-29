@@ -160,6 +160,13 @@ describe('selected Zenon node and wallet session authority', () => {
     z.syrius.chainId = 322; await expect(z.sendBlock({ toAddress: account })).rejects.toThrow('chain')
     z.syrius.chainId = 1; z.node.conn = 'closed'; await expect(z.sendBlock({ toAddress: account })).rejects.toThrow('freshness')
   })
+  it('blocks a send until the node is known, but says the chains differ only when both are known', async () => {
+    const z = await connected(), saved = z.node.chainId
+    z.node.chainId = 0; expect(z.wrongZenonChain()).toBe(true); expect(z.zenonChainMismatch()).toBe(false)
+    z.node.chainId = saved; z.syrius.chainId = null; expect(z.wrongZenonChain()).toBe(true); expect(z.zenonChainMismatch()).toBe(false)
+    z.syrius.chainId = 322; expect(z.zenonChainMismatch()).toBe(true)
+    z.syrius.chainId = saved; expect(z.zenonChainMismatch()).toBe(false)
+  })
   it('retains a delayed original publication under its original account and chain', async () => {
     const z = await connected(), gate = deferred<any>(); f.wallet.send.mockImplementation((_template: any, options: any) => { options.beforePrompt(); return gate.promise })
     const pending = z.sendBlock({ toAddress: account }); await vi.waitFor(() => expect(f.wallet.send).toHaveBeenCalled())
@@ -172,6 +179,6 @@ describe('selected Zenon node and wallet session authority', () => {
     for (const value of [null, 'embedded', 'ws://remote.fixture.invalid', 'https://name:secret@fixture.invalid', 'wss://fixture.invalid/#fragment']) expect(z.nodeProblem(value)).not.toBe('')
     expect(z.nodeProblem('ws://127.0.0.1:46998')).toBe(''); expect(z.nodeProblem('https://fixture.invalid')).toBe('')
     expect(z.hostOf('wss://fixture.invalid:123')).toBe('fixture.invalid:123'); expect(z.hostOf('unavailable')).toBe('unavailable')
-    expect(z.networkLabel()).toBe('Mainnet'); expect(z.onBuildChain()).toBe(true); expect(z.wrongZenonChain()).toBe(false)
+    expect(z.networkLabel()).toBe('Mainnet'); expect(z.onBuildChain()).toBe(true); expect(z.wrongZenonChain()).toBe(false); expect(z.zenonChainMismatch()).toBe(false)
   })
 })
